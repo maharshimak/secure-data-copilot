@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secure-data-copilot"
+description = "Local read-only SQLite analytics with deterministic planning, SQL restrictions, bounded results and query audit metadata."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["fastapi>=0.141.1,<1","uvicorn[standard]>=0.52.4,<1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1.1,<10","httpx>=0.28.1,<1","ruff>=0.16.7,<1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
