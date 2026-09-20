@@ -1,5 +1,7 @@
 # 🔐 Secure Data Copilot
 
+[Live Interactive Demo](https://maharshimak.github.io/makma-ai-os/projects/secure-data-copilot/) · [AI Systems Lab](https://maharshimak.github.io/makma-ai-os/projects/)
+
 A local **read-only analytics copilot** for relational data. The system is designed around a strict rule: an AI assistant may help reason over business data, but it must not silently gain write access to the database.
 
 ## Implemented
