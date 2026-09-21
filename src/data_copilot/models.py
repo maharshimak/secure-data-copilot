@@ -20,7 +20,7 @@ class QueryPlan:
     question: str
     sql: str
     rationale: str
-    confidence: float
+    confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

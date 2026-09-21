@@ -6,6 +6,28 @@
 
 A local **read-only analytics copilot** for relational data. The system is designed around a strict rule: an AI assistant may help reason over business data, but it must not silently gain write access to the database.
 
+
+## Product contract — engineering upgrade
+
+**Problem and audience:** A safe local analytics workspace for engineers inspecting how questions become bounded business-data queries.
+
+**Live tool:** https://maharshimak.github.io/makma-ai-os/projects/secure-data-copilot/
+
+**Implemented browser workflow:** Editable synthetic customers/orders, supported natural-language question templates, schema privacy findings with reasons, read-only query inspection, risk budget, computed rows/statistics and CSV/JSON export. Mutation intent is rejected before planning.
+
+**Backend and parity contract:** Browser executes a structured deterministic local query plan, NOT the displayed SQL. Python executes validated read-only SQLite. The planner now rejects mutation intent, checks the orders dependency, and returns confidence=None because these rules do not produce calibrated probabilities. CSV cells beginning with formula characters are neutralized.
+
+**Architecture:** `makma-ai-os/demo` is the shared web product source and Pages deployment. This repository owns its Python domain package. The central `tests/e2e` suite exercises all nine products; `tests/fixtures/python-parity.json` plus `scripts/generate_parity.py` guard shared mathematical contracts. Backend revisions used for regeneration are pinned in the central `backend-lock.json`.
+
+**Safety and limitations:** Four browser query families, in-memory data, column-name privacy heuristics and no general language-to-SQL model. Browser permits at most 1000 customers and 10000 orders. Authentication and multi-tenant data governance are not implemented. Inputs are validated, rendered user values are escaped, and deterministic results are not presented as model inference.
+
+**Verification:** Run `python -m ruff check .` and `python -m pytest -q`. `tests/test_engineering_upgrade.py` protects the new rejection/correctness paths. Central web checks: `npm ci`, `npm test`, `npm run build`, `npx playwright install --with-deps chromium`, `npm run test:e2e`. CI gates publishing on browser interactions and validates all public URLs after deployment.
+
+**Highest-value next work:** Read-only embedded SQLite with cancellation, richer schema-aware planning and query-cost limits.
+
+**Provenance:** Independent MAK’MA Studio engineering implementation; examples are synthetic and no employer code or data is included. Existing MIT license applies.
+
+
 ## Implemented
 
 - schema introspection for SQLite
