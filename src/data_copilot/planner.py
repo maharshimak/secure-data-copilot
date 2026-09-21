@@ -11,7 +11,7 @@ class DeterministicPlanner:
             raise ValueError("A question of 1 to 2000 characters is required.")
         q = question.lower().strip()
         if re.search(
-            r"\b(insert|update|delete|drop|alter|create|replace|truncate|attach|detach|pragma|vacuum|grant|revoke)\b",
+            r"\b(insert|update|delete|drop|alter|create|replace|truncate|attach|detach|pragma|vacuum|reindex|grant|revoke|commit|rollback|savepoint)\b",
             q,
         ):
             raise ValueError("Mutation or administrative intent is not allowed.")
