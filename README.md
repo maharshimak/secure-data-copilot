@@ -15,7 +15,7 @@ A local **read-only analytics copilot** for relational data. The system is desig
 
 **Implemented browser workflow:** Editable synthetic customers/orders, supported natural-language question templates, schema privacy findings with reasons, read-only query inspection, risk budget, computed rows/statistics and CSV/JSON export. Mutation intent is rejected before planning.
 
-**Backend and parity contract:** Browser executes a structured deterministic local query plan, NOT the displayed SQL. Python executes validated read-only SQLite. The planner now rejects mutation intent, checks the orders dependency, and returns confidence=None because these rules do not produce calibrated probabilities. CSV cells beginning with formula characters are neutralized.
+**Backend and parity contract:** Browser executes a structured deterministic local query plan, NOT the displayed SQL. Python parses SQLite SQL with `sqlglot`, requires exactly one read-only query expression, rejects forbidden AST operations/functions, wraps the result with an outer row limit, and executes through a native read-only/query-only SQLite connection. The planner remains deterministic and returns confidence=None because its rules do not produce calibrated probabilities. CSV cells beginning with formula characters are neutralized.
 
 **Architecture:** `makma-ai-os/demo` is the shared web product source and Pages deployment. This repository owns its Python domain package. The central `tests/e2e` suite exercises all nine products; `tests/fixtures/python-parity.json` plus `scripts/generate_parity.py` guard shared mathematical contracts. Backend revisions used for regeneration are pinned in the central `backend-lock.json`.
 
@@ -23,7 +23,7 @@ A local **read-only analytics copilot** for relational data. The system is desig
 
 **Verification:** Run `python -m ruff check .` and `python -m pytest -q`. `tests/test_engineering_upgrade.py` protects the new rejection/correctness paths. Central web checks: `npm ci`, `npm test`, `npm run build`, `npx playwright install --with-deps chromium`, `npm run test:e2e`. CI gates publishing on browser interactions and validates all public URLs after deployment.
 
-**Highest-value next work:** Read-only embedded SQLite with cancellation, richer schema-aware planning and query-cost limits.
+**Highest-value next work:** Richer schema-aware planning, row/column authorization, persistent audit wiring and query-cost limits.
 
 **Provenance:** Independent MAK’MA Studio engineering implementation; examples are synthetic and no employer code or data is included. Existing MIT license applies.
 
@@ -31,7 +31,7 @@ A local **read-only analytics copilot** for relational data. The system is desig
 ## Implemented
 
 - schema introspection for SQLite
-- read-only SQL policy engine
+- parsed read-only SQL AST policy engine using `sqlglot`
 - multi-statement blocking
 - row-limit enforcement
 - query audit metadata
@@ -88,13 +88,12 @@ Open `http://localhost:8000/docs`.
 
 Only `SELECT` and `WITH ... SELECT` queries are accepted. Write, DDL, privileged, multi-statement and oversized queries are blocked before execution. SQLite is also opened in native read-only mode.
 
-This is defense in depth, not a claim that string-level validation is a complete SQL sandbox. A production PostgreSQL version should combine AST validation with a dedicated least-privilege database role.
+This is defense in depth, not a claim that AST validation alone is a complete SQL sandbox. The parser boundary is combined with SQLite native read-only/query-only mode, a progress deadline and a bounded outer result. A production PostgreSQL version should additionally use a dedicated least-privilege database role and row/column authorization.
 
 ## Roadmap
 
 - structured LLM planner adapter
 - PostgreSQL adapter
-- SQL AST validation with sqlglot
 - semantic business metrics layer
 - row/column-level authorization
 - chart specifications
@@ -103,7 +102,7 @@ This is defense in depth, not a claim that string-level validation is a complete
 
 ## Scope and limitations
 
-SQL policy is conservative lexical filtering, not a complete SQL parser. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It has no authentication or row/column authorization and must remain local or behind an access-controlled gateway. Planner templates target a small demo schema, not arbitrary business reasoning. Query audit metadata is returned; the optional JSONL audit utility is not wired into the request path.
+SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It has no authentication or row/column authorization and must remain local or behind an access-controlled gateway. Planner templates still target a small demo schema rather than arbitrary business reasoning. Query audit metadata is returned; the optional JSONL audit utility is not wired into the request path.
 
 ## Installation and development
 
@@ -164,7 +163,7 @@ The service returns 503 until a database is configured. Mount a synthetic databa
 
 ## Next engineering work
 
-AST-based validation; database roles and row/column authorization; authenticated dataset selection; persistent audit wiring; PostgreSQL adapter. These are planned work, not current capabilities.
+Schema-aware structured model planning; database roles and row/column authorization; authenticated dataset selection; persistent audit wiring; PostgreSQL adapter; query-cost estimation. These are planned work, not current capabilities.
 
 ## Contributing and security
 
