@@ -3,7 +3,7 @@ from typing import Protocol
 
 from data_copilot.database import SQLiteCatalog
 from data_copilot.insights import summarize_rows
-from data_copilot.models import QueryAudit, QueryResult, TableInfo, QueryPlan
+from data_copilot.models import QueryAudit, QueryPlan, QueryResult, TableInfo
 from data_copilot.planner import DeterministicPlanner
 from data_copilot.safety import validate_read_only
 
