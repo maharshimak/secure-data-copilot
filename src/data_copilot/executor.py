@@ -1,16 +1,26 @@
 from time import perf_counter
+from typing import Protocol
 
 from data_copilot.database import SQLiteCatalog
 from data_copilot.insights import summarize_rows
-from data_copilot.models import QueryAudit, QueryResult
+from data_copilot.models import QueryAudit, QueryResult, TableInfo, QueryPlan
 from data_copilot.planner import DeterministicPlanner
 from data_copilot.safety import validate_read_only
 
 
+class Planner(Protocol):
+    def plan(self, question: str, schema: list[TableInfo]) -> QueryPlan: ...
+
+
 class DataCopilot:
-    def __init__(self, database_path: str, max_rows: int = 200) -> None:
+    def __init__(
+        self,
+        database_path: str,
+        max_rows: int = 200,
+        planner: Planner | None = None,
+    ) -> None:
         self.catalog = SQLiteCatalog(database_path)
-        self.planner = DeterministicPlanner()
+        self.planner = planner or DeterministicPlanner()
         self.max_rows = max_rows
 
     def ask(self, question: str) -> QueryResult:
