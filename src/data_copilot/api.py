@@ -10,7 +10,6 @@ from data_copilot.ai_planner import OpenAICompatiblePlanner
 from data_copilot.executor import DataCopilot
 from data_copilot.safety import UnsafeQueryError
 
-
 app = FastAPI(
     title="Secure Data Copilot",
     version="0.2.0",
