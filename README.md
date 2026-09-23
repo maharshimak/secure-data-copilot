@@ -19,11 +19,11 @@ A local **read-only analytics copilot** for relational data. The system is desig
 
 **Architecture:** `makma-ai-os/demo` is the shared web product source and Pages deployment. This repository owns its Python domain package. The central `tests/e2e` suite exercises all nine products; `tests/fixtures/python-parity.json` plus `scripts/generate_parity.py` guard shared mathematical contracts. Backend revisions used for regeneration are pinned in the central `backend-lock.json`.
 
-**Safety and limitations:** Four browser query families, in-memory data, column-name privacy heuristics and no general language-to-SQL model. Browser permits at most 1000 customers and 10000 orders. Authentication and multi-tenant data governance are not implemented. Inputs are validated, rendered user values are escaped, and deterministic results are not presented as model inference.
+**Safety and limitations:** The browser remains a deterministic four-family demo. The Python backend now also supports an optional OpenAI-compatible schema-aware planner, but every proposed statement is still treated as untrusted and must pass the parsed SQL AST policy plus the native read-only SQLite boundary before execution. Browser permits at most 1000 customers and 10000 orders. Authentication and multi-tenant data governance are not implemented. Inputs are validated, rendered user values are escaped, and deterministic results are not presented as model inference.
 
 **Verification:** Run `python -m ruff check .` and `python -m pytest -q`. `tests/test_engineering_upgrade.py` protects the new rejection/correctness paths. Central web checks: `npm ci`, `npm test`, `npm run build`, `npx playwright install --with-deps chromium`, `npm run test:e2e`. CI gates publishing on browser interactions and validates all public URLs after deployment.
 
-**Highest-value next work:** Richer schema-aware planning, row/column authorization, persistent audit wiring and query-cost limits.
+**Highest-value next work:** Row/column authorization, persistent audit wiring, query-cost estimation and a production PostgreSQL least-privilege adapter.
 
 **Provenance:** Independent MAK’MA Studio engineering implementation; examples are synthetic and no employer code or data is included. Existing MIT license applies.
 
@@ -37,6 +37,7 @@ A local **read-only analytics copilot** for relational data. The system is desig
 - query audit metadata
 - typed query plans
 - deterministic local planner baseline
+- optional OpenAI-compatible schema-aware planner behind the same AST/read-only execution boundary
 - execution timing
 - automatic numeric summaries
 - FastAPI service
@@ -92,7 +93,6 @@ This is defense in depth, not a claim that AST validation alone is a complete SQ
 
 ## Roadmap
 
-- structured LLM planner adapter
 - PostgreSQL adapter
 - semantic business metrics layer
 - row/column-level authorization
