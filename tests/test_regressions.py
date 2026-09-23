@@ -40,4 +40,6 @@ def test_api_does_not_accept_client_filesystem_path(monkeypatch):
     response = TestClient(app).post(
         "/v1/ask", json={"question": "orders", "database_path": "/private.db"}
     )
-    assert response.status_code == 503
+    # Client-controlled filesystem paths are not part of the API schema and
+    # must be rejected before any database access is attempted.
+    assert response.status_code == 422
