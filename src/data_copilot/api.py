@@ -6,6 +6,7 @@ from dataclasses import asdict
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from data_copilot.access import AccessPolicy
 from data_copilot.ai_planner import OpenAICompatiblePlanner
 from data_copilot.executor import DataCopilot
 from data_copilot.safety import UnsafeQueryError
@@ -75,6 +76,33 @@ def build_planner() -> OpenAICompatiblePlanner | None:
     )
 
 
+def _csv_set(name: str) -> frozenset[str]:
+    return frozenset(
+        item.strip()
+        for item in os.environ.get(name, "").split(",")
+        if item.strip()
+    )
+
+
+def build_access_policy() -> AccessPolicy | None:
+    allowed = _csv_set("COPILOT_ALLOWED_TABLES")
+    denied = _csv_set("COPILOT_DENIED_COLUMNS")
+    guarded = _csv_set("COPILOT_GUARDED_TABLES")
+    raw_max_joins = os.environ.get("COPILOT_MAX_JOINS", "").strip()
+    if not allowed and not denied and not guarded and not raw_max_joins:
+        return None
+    try:
+        max_joins = int(raw_max_joins or "4")
+    except ValueError as error:
+        raise RuntimeError("COPILOT_MAX_JOINS must be an integer.") from error
+    return AccessPolicy(
+        allowed_tables=allowed or None,
+        denied_columns=denied,
+        require_where_for_tables=guarded,
+        max_joins=max_joins,
+    )
+
+
 protected = [Depends(require_auth)]
 
 
@@ -87,6 +115,12 @@ def health() -> dict[str, object]:
             if os.environ.get("COPILOT_MODEL_BASE_URL")
             and os.environ.get("COPILOT_MODEL")
             else "deterministic"
+        ),
+        "access_policy_configured": bool(
+            os.environ.get("COPILOT_ALLOWED_TABLES")
+            or os.environ.get("COPILOT_DENIED_COLUMNS")
+            or os.environ.get("COPILOT_GUARDED_TABLES")
+            or os.environ.get("COPILOT_MAX_JOINS")
         ),
     }
 
@@ -102,6 +136,7 @@ def ask(request: AskRequest) -> dict[str, object]:
             database_path=database_path,
             max_rows=request.max_rows,
             planner=planner,
+            access_policy=build_access_policy(),
         ).ask(request.question)
         return asdict(result)
     except RuntimeError as error:
