@@ -48,3 +48,19 @@ def test_authorized_schema_hides_tables_and_denied_columns():
 
     assert [table.name for table in projected] == ["sales"]
     assert [column.name for column in projected[0].columns] == ["id"]
+
+
+
+def test_data_copilot_blocks_credential_columns_before_planning(tmp_path):
+    import sqlite3
+
+    from data_copilot.executor import DataCopilot
+
+    database = tmp_path / "sensitive.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE users(id INTEGER, api_key TEXT)")
+        connection.execute("INSERT INTO users VALUES (1, 'synthetic')")
+        connection.commit()
+
+    with pytest.raises(ValueError, match="credential-like"):
+        DataCopilot(str(database)).ask("show users")
