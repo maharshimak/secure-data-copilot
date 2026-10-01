@@ -19,11 +19,11 @@ A local **read-only analytics copilot** for relational data. The system is desig
 
 **Architecture:** `makma-ai-os/demo` is the shared web product source and Pages deployment. This repository owns its Python domain package. The central `tests/e2e` suite exercises all nine products; `tests/fixtures/python-parity.json` plus `scripts/generate_parity.py` guard shared mathematical contracts. Backend revisions used for regeneration are pinned in the central `backend-lock.json`.
 
-**Safety and limitations:** The browser remains a deterministic four-family demo. The Python backend now also supports an optional OpenAI-compatible schema-aware planner, but every proposed statement is still treated as untrusted and must pass the parsed SQL AST policy plus the native read-only SQLite boundary before execution. Browser permits at most 1000 customers and 10000 orders. Authentication and multi-tenant data governance are not implemented. Inputs are validated, rendered user values are escaped, and deterministic results are not presented as model inference.
+**Safety and limitations:** The browser remains a deterministic four-family demo. The Python backend also supports an optional OpenAI-compatible schema-aware planner, but every proposed statement is treated as untrusted and must pass table/column authorization, structural query-complexity limits, a query-risk budget, the parsed SQL AST policy, and the native read-only SQLite boundary before execution. Browser permits at most 1000 customers and 10000 orders. Bearer authentication exists for remote API access; true multi-user identity/session ownership and database row-level security are not implemented. Inputs are validated, rendered user values are escaped, and deterministic results are not presented as model inference.
 
 **Verification:** Run `python -m ruff check .` and `python -m pytest -q`. `tests/test_engineering_upgrade.py` protects the new rejection/correctness paths. Central web checks: `npm ci`, `npm test`, `npm run build`, `npx playwright install --with-deps chromium`, `npm run test:e2e`. CI gates publishing on browser interactions and validates all public URLs after deployment.
 
-**Highest-value next work:** Row/column authorization, persistent audit wiring, query-cost estimation and a production PostgreSQL least-privilege adapter.
+**Highest-value next work:** Row-level authorization, persistent audit storage, database-native cost estimation and a production PostgreSQL least-privilege adapter.
 
 **Provenance:** Independent MAK’MA Studio engineering implementation; examples are synthetic and no employer code or data is included. Existing MIT license applies.
 
@@ -34,7 +34,7 @@ A local **read-only analytics copilot** for relational data. The system is desig
 - parsed read-only SQL AST policy engine using `sqlglot`
 - multi-statement blocking
 - row-limit enforcement
-- query audit metadata
+- query audit metadata including enforced risk and complexity scores
 - typed query plans
 - deterministic local planner baseline
 - optional OpenAI-compatible schema-aware planner behind the same AST/read-only execution boundary
@@ -87,7 +87,7 @@ Open `http://localhost:8000/docs`.
 
 ## Security model
 
-Only `SELECT` and `WITH ... SELECT` queries are accepted. Write, DDL, privileged, multi-statement and oversized queries are blocked before execution. SQLite is also opened in native read-only mode.
+Only `SELECT` and `WITH ... SELECT` queries are accepted. Write, DDL, privileged, multi-statement and oversized queries are blocked before execution. Allowed queries are additionally checked against structural complexity and risk budgets before SQLite is reached. SQLite is opened in native read-only/query-only mode.
 
 This is defense in depth, not a claim that AST validation alone is a complete SQL sandbox. The parser boundary is combined with SQLite native read-only/query-only mode, a progress deadline and a bounded outer result. A production PostgreSQL version should additionally use a dedicated least-privilege database role and row/column authorization.
 
@@ -102,7 +102,7 @@ This is defense in depth, not a claim that AST validation alone is a complete SQ
 
 ## Scope and limitations
 
-SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It has no authentication or row/column authorization and must remain local or behind an access-controlled gateway. Planner templates still target a small demo schema rather than arbitrary business reasoning. Query audit metadata is returned; the optional JSONL audit utility is not wired into the request path.
+SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It is local-only by default and supports bearer-authenticated remote access. Optional table/column authorization can restrict the schema visible to a model-backed planner and is re-checked against the generated SQL before execution; true user/role identity, row-level security and multi-tenant ownership remain future work. Planner templates still target a small demo schema rather than arbitrary business reasoning. Query audit metadata is returned; the optional JSONL audit utility is not wired into the request path.
 
 ## Installation and development
 
@@ -163,7 +163,7 @@ The service returns 503 until a database is configured. Mount a synthetic databa
 
 ## Next engineering work
 
-Schema-aware structured model planning; database roles and row/column authorization; authenticated dataset selection; persistent audit wiring; PostgreSQL adapter; query-cost estimation. These are planned work, not current capabilities.
+Database roles and row-level authorization; authenticated dataset selection; persistent audit storage; PostgreSQL adapter; database-native query-cost estimation. These are planned work, not current capabilities.
 
 ## Contributing and security
 

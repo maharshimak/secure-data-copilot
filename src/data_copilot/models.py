@@ -29,6 +29,9 @@ class QueryAudit:
     duration_ms: float
     row_count: int
     columns: list[str]
+    risk_score: int = 0
+    risk_level: str = "low"
+    complexity_score: int = 0
 
 
 @dataclass(frozen=True, slots=True)
