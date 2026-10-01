@@ -1,7 +1,7 @@
 from time import perf_counter
 from typing import Protocol
 
-from data_copilot.access import AccessPolicy, authorize_sql
+from data_copilot.access import AccessPolicy, authorize_sql, authorized_schema
 from data_copilot.database import SQLiteCatalog
 from data_copilot.insights import summarize_rows
 from data_copilot.models import QueryAudit, QueryPlan, QueryResult, TableInfo
@@ -28,7 +28,12 @@ class DataCopilot:
 
     def ask(self, question: str) -> QueryResult:
         schema = self.catalog.schema()
-        plan = self.planner.plan(question, schema)
+        planner_schema = (
+            authorized_schema(schema, self.access_policy)
+            if self.access_policy is not None
+            else schema
+        )
+        plan = self.planner.plan(question, planner_schema)
         if self.access_policy is not None:
             authorize_sql(plan.sql, self.access_policy)
         safe_sql = validate_read_only(plan.sql, max_rows=self.max_rows)
