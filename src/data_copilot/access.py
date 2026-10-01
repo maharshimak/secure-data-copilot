@@ -6,6 +6,8 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from data_copilot.models import TableInfo
+
 
 class AccessPolicyError(ValueError):
     pass
@@ -74,3 +76,29 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
         raise AccessPolicyError(
             "Queries over guarded tables require an explicit WHERE predicate."
         )
+
+
+def authorized_schema(schema: list[TableInfo], policy: AccessPolicy) -> list[TableInfo]:
+    """Project a catalog down to exactly the metadata the planner may observe."""
+
+    allowed = (
+        {name.casefold() for name in policy.allowed_tables}
+        if policy.allowed_tables is not None
+        else None
+    )
+    denied = {name.casefold() for name in policy.denied_columns}
+    projected: list[TableInfo] = []
+    for table in schema:
+        if allowed is not None and table.name.casefold() not in allowed:
+            continue
+        projected.append(
+            TableInfo(
+                name=table.name,
+                columns=[
+                    column
+                    for column in table.columns
+                    if column.name.casefold() not in denied
+                ],
+            )
+        )
+    return projected
