@@ -48,7 +48,15 @@ async def require_auth(
         return
 
     client_host = request.client.host if request.client else ""
-    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+    host_header = request.headers.get("host", "").casefold()
+    local_host = (
+        host_header in {"localhost", "127.0.0.1", "[::1]", "testserver"}
+        or host_header.startswith(("localhost:", "127.0.0.1:", "[::1]:"))
+    )
+    if (
+        client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}
+        or not local_host
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Remote access requires COPILOT_API_TOKEN.",
@@ -132,11 +140,19 @@ def ask(request: AskRequest) -> dict[str, object]:
         raise HTTPException(status_code=503, detail="No server database configured.")
     try:
         planner = build_planner()
+        access_policy = build_access_policy()
+        if planner is not None and (
+            access_policy is None or access_policy.allowed_tables is None
+        ):
+            raise RuntimeError(
+                "Model-backed planning requires COPILOT_ALLOWED_TABLES so unauthorized "
+                "schema metadata is never disclosed to the model provider."
+            )
         result = DataCopilot(
             database_path=database_path,
             max_rows=request.max_rows,
             planner=planner,
-            access_policy=build_access_policy(),
+            access_policy=access_policy,
         ).ask(request.question)
         return asdict(result)
     except RuntimeError as error:
