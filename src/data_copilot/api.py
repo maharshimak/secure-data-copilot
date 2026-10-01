@@ -132,11 +132,19 @@ def ask(request: AskRequest) -> dict[str, object]:
         raise HTTPException(status_code=503, detail="No server database configured.")
     try:
         planner = build_planner()
+        access_policy = build_access_policy()
+        if planner is not None and (
+            access_policy is None or access_policy.allowed_tables is None
+        ):
+            raise RuntimeError(
+                "Model-backed planning requires COPILOT_ALLOWED_TABLES so unauthorized "
+                "schema metadata is never disclosed to the model provider."
+            )
         result = DataCopilot(
             database_path=database_path,
             max_rows=request.max_rows,
             planner=planner,
-            access_policy=build_access_policy(),
+            access_policy=access_policy,
         ).ask(request.question)
         return asdict(result)
     except RuntimeError as error:
