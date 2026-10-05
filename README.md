@@ -34,7 +34,7 @@ A local **read-only analytics copilot** for relational data. The system is desig
 - parsed read-only SQL AST policy engine using `sqlglot`
 - multi-statement blocking
 - row-limit enforcement
-- query audit metadata including enforced risk and complexity scores
+- query audit metadata including enforced risk and complexity scores\n- optional durable JSONL audit persistence wired into the API execution path
 - typed query plans
 - deterministic local planner baseline
 - optional OpenAI-compatible schema-aware planner behind the same AST/read-only execution boundary
@@ -102,7 +102,7 @@ This is defense in depth, not a claim that AST validation alone is a complete SQ
 
 ## Scope and limitations
 
-SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It is local-only by default and supports bearer-authenticated remote access. Optional table/column authorization can restrict the schema visible to a model-backed planner and is re-checked against the generated SQL before execution; true user/role identity, row-level security and multi-tenant ownership remain future work. Planner templates still target a small demo schema rather than arbitrary business reasoning. Query audit metadata is returned; the optional JSONL audit utility is not wired into the request path.
+SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It is local-only by default and supports bearer-authenticated remote access. Optional table/column authorization can restrict the schema visible to a model-backed planner and is re-checked against the generated SQL before execution; true user/role identity, row-level security and multi-tenant ownership remain future work. Planner templates still target a small demo schema rather than arbitrary business reasoning. Query audit metadata is returned and can be durably persisted as JSONL by setting `COPILOT_AUDIT_LOG_PATH`; each successful query then returns the persisted `event_id`.
 
 ## Installation and development
 
@@ -163,7 +163,7 @@ The service returns 503 until a database is configured. Mount a synthetic databa
 
 ## Next engineering work
 
-Database roles and row-level authorization; authenticated dataset selection; persistent audit storage; PostgreSQL adapter; database-native query-cost estimation. These are planned work, not current capabilities.
+Database roles and row-level authorization; authenticated dataset selection; PostgreSQL adapter; database-native query-cost estimation. These are planned work, not current capabilities.
 
 ## Contributing and security
 
