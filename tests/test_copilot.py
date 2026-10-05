@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+from data_copilot.audit import JsonlAuditStore
 from data_copilot.executor import DataCopilot
 from data_copilot.models import QueryPlan
 from data_copilot.query_budget import QueryBudget, QueryBudgetExceeded
@@ -94,3 +95,25 @@ def test_runtime_blocks_high_risk_read_only_query(tmp_path) -> None:
 
     with pytest.raises(UnsafeQueryError, match="risk score"):
         copilot.ask("test risk budget")
+
+
+def test_runtime_persists_audit_event_when_store_is_configured(tmp_path) -> None:
+    db = tmp_path / "audit.db"
+    connection = sqlite3.connect(db)
+    connection.execute("CREATE TABLE orders(id INTEGER PRIMARY KEY, amount REAL)")
+    connection.execute("INSERT INTO orders VALUES (1, 42.0)")
+    connection.commit()
+    connection.close()
+
+    audit_path = tmp_path / "audit.jsonl"
+    copilot = DataCopilot(
+        str(db),
+        planner=StaticPlanner("SELECT id, amount FROM orders"),
+        audit_store=JsonlAuditStore(str(audit_path)),
+    )
+    result = copilot.ask("show orders")
+
+    assert result.audit.event_id
+    payload = audit_path.read_text(encoding="utf-8")
+    assert result.audit.event_id in payload
+    assert "show orders" in payload
