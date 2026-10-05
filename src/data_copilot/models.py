@@ -32,6 +32,7 @@ class QueryAudit:
     risk_score: int = 0
     risk_level: str = "low"
     complexity_score: int = 0
+    event_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
