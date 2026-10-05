@@ -2,6 +2,7 @@ from time import perf_counter
 from typing import Protocol
 
 from data_copilot.access import AccessPolicy, authorize_sql, authorized_schema
+from data_copilot.audit import JsonlAuditStore, build_event
 from data_copilot.database import SQLiteCatalog
 from data_copilot.insights import summarize_rows
 from data_copilot.models import QueryAudit, QueryPlan, QueryResult, TableInfo
@@ -24,6 +25,7 @@ class DataCopilot:
         access_policy: AccessPolicy | None = None,
         query_budget: QueryBudget | None = None,
         max_risk_score: int = 40,
+        audit_store: JsonlAuditStore | None = None,
     ) -> None:
         self.catalog = SQLiteCatalog(database_path)
         self.planner = planner or DeterministicPlanner()
@@ -31,6 +33,7 @@ class DataCopilot:
         self.access_policy = access_policy
         self.query_budget = query_budget or QueryBudget()
         self.max_risk_score = max_risk_score
+        self.audit_store = audit_store
 
     def ask(self, question: str) -> QueryResult:
         schema = self.catalog.schema()
@@ -52,6 +55,16 @@ class DataCopilot:
         started = perf_counter()
         columns, rows = self.catalog.execute(safe_sql)
         duration_ms = (perf_counter() - started) * 1000
+        event_id: str | None = None
+        if self.audit_store is not None:
+            event = build_event(
+                question=question,
+                sql=safe_sql,
+                duration_ms=duration_ms,
+                row_count=len(rows),
+            )
+            self.audit_store.append(event)
+            event_id = event.event_id
 
         return QueryResult(
             plan=plan,
@@ -64,6 +77,7 @@ class DataCopilot:
                 risk_score=risk.score,
                 risk_level=risk.level,
                 complexity_score=complexity.score,
+                event_id=event_id,
             ),
             insights=summarize_rows(rows),
         )
