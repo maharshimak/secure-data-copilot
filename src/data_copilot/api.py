@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from data_copilot.access import AccessPolicy
 from data_copilot.ai_planner import OpenAICompatiblePlanner
+from data_copilot.audit import JsonlAuditStore
 from data_copilot.executor import DataCopilot
 from data_copilot.safety import UnsafeQueryError
 
@@ -16,7 +17,7 @@ app = FastAPI(
     version="0.2.0",
     description=(
         "Read-only analytics copilot with SQL AST enforcement, database query-only mode, "
-        "optional model-backed planning and bearer-protected remote access."
+        "optional model-backed planning, durable audit events and bearer-protected remote access."
     ),
 )
 
@@ -76,6 +77,8 @@ def build_planner() -> OpenAICompatiblePlanner | None:
         timeout_seconds = float(os.environ.get("COPILOT_MODEL_TIMEOUT_SECONDS", "45"))
     except ValueError as error:
         raise RuntimeError("COPILOT_MODEL_TIMEOUT_SECONDS must be numeric.") from error
+    if timeout_seconds <= 0:
+        raise RuntimeError("COPILOT_MODEL_TIMEOUT_SECONDS must be greater than zero.")
     return OpenAICompatiblePlanner(
         base_url=base_url,
         model=model,
@@ -103,12 +106,21 @@ def build_access_policy() -> AccessPolicy | None:
         max_joins = int(raw_max_joins or "4")
     except ValueError as error:
         raise RuntimeError("COPILOT_MAX_JOINS must be an integer.") from error
+    if max_joins < 0:
+        raise RuntimeError("COPILOT_MAX_JOINS must be zero or greater.")
     return AccessPolicy(
         allowed_tables=allowed or None,
         denied_columns=denied,
         require_where_for_tables=guarded,
         max_joins=max_joins,
     )
+
+
+def build_audit_store() -> JsonlAuditStore | None:
+    path = os.environ.get("COPILOT_AUDIT_LOG_PATH", "").strip()
+    if not path:
+        return None
+    return JsonlAuditStore(path)
 
 
 protected = [Depends(require_auth)]
@@ -130,6 +142,9 @@ def health() -> dict[str, object]:
             or os.environ.get("COPILOT_GUARDED_TABLES")
             or os.environ.get("COPILOT_MAX_JOINS")
         ),
+        "audit_persistence_configured": bool(
+            os.environ.get("COPILOT_AUDIT_LOG_PATH", "").strip()
+        ),
     }
 
 
@@ -141,6 +156,7 @@ def ask(request: AskRequest) -> dict[str, object]:
     try:
         planner = build_planner()
         access_policy = build_access_policy()
+        audit_store = build_audit_store()
         if planner is not None and (
             access_policy is None or access_policy.allowed_tables is None
         ):
@@ -153,6 +169,7 @@ def ask(request: AskRequest) -> dict[str, object]:
             max_rows=request.max_rows,
             planner=planner,
             access_policy=access_policy,
+            audit_store=audit_store,
         ).ask(request.question)
         return asdict(result)
     except RuntimeError as error:
