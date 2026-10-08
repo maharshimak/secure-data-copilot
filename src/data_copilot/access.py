@@ -40,7 +40,18 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
         raise AccessPolicyError("Authorization requires exactly one query.")
     query = statements[0]
 
-    tables = {table.name.casefold() for table in query.find_all(exp.Table)}
+    # CTE references are local query relations, not database tables.
+    # Only physical tables must appear in the database allowlist.
+    cte_names = {
+        cte.alias_or_name.casefold()
+        for cte in query.find_all(exp.CTE)
+        if cte.alias_or_name
+    }
+    tables = {
+        table.name.casefold()
+        for table in query.find_all(exp.Table)
+        if table.name.casefold() not in cte_names
+    }
     if policy.allowed_tables is not None:
         allowed = {name.casefold() for name in policy.allowed_tables}
         outside = sorted(tables - allowed)
