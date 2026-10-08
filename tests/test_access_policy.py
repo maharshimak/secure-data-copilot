@@ -53,3 +53,20 @@ def test_guarded_table_filter_on_own_select_is_accepted():
         "SELECT name FROM (SELECT name FROM customers WHERE id = 1) AS filtered",
         policy,
     )
+
+
+def test_cte_alias_does_not_require_database_table_allowlist_entry():
+    policy = AccessPolicy(allowed_tables=frozenset({"customers"}))
+    authorize_sql(
+        "WITH selected AS (SELECT name FROM customers) SELECT name FROM selected",
+        policy,
+    )
+
+
+def test_cte_cannot_hide_unauthorized_physical_table():
+    policy = AccessPolicy(allowed_tables=frozenset({"customers"}))
+    with pytest.raises(AccessPolicyError, match="unauthorized"):
+        authorize_sql(
+            "WITH selected AS (SELECT salary FROM payroll) SELECT salary FROM selected",
+            policy,
+        )
