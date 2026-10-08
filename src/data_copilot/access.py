@@ -40,7 +40,18 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
         raise AccessPolicyError("Authorization requires exactly one query.")
     query = statements[0]
 
-    tables = {table.name.casefold() for table in query.find_all(exp.Table)}
+    # CTE references are local query relations, not database tables.
+    # Only physical tables must appear in the database allowlist.
+    cte_names = {
+        cte.alias_or_name.casefold()
+        for cte in query.find_all(exp.CTE)
+        if cte.alias_or_name
+    }
+    tables = {
+        table.name.casefold()
+        for table in query.find_all(exp.Table)
+        if table.name.casefold() not in cte_names
+    }
     if policy.allowed_tables is not None:
         allowed = {name.casefold() for name in policy.allowed_tables}
         outside = sorted(tables - allowed)
@@ -72,10 +83,18 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
             )
 
     guarded = {name.casefold() for name in policy.require_where_for_tables}
-    if tables & guarded and query.args.get("where") is None:
-        raise AccessPolicyError(
-            "Queries over guarded tables require an explicit WHERE predicate."
-        )
+    # Each SELECT reading a guarded table must have its own filter. An outer
+    # WHERE on a CTE/subquery does not necessarily constrain the inner scan.
+    for select in query.find_all(exp.Select):
+        local_tables = {
+            table.name.casefold()
+            for table in select.find_all(exp.Table)
+            if table.find_ancestor(exp.Select) is select
+        }
+        if local_tables & guarded and select.args.get("where") is None:
+            raise AccessPolicyError(
+                "Queries over guarded tables require an explicit WHERE predicate."
+            )
 
 
 def authorized_schema(schema: list[TableInfo], policy: AccessPolicy) -> list[TableInfo]:

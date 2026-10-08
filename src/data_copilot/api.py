@@ -141,8 +141,16 @@ def ask(request: AskRequest) -> dict[str, object]:
     try:
         planner = build_planner()
         access_policy = build_access_policy()
+        # Bearer-authenticated deployments must explicitly restrict database tables,
+        # regardless of whether planning is deterministic or model-backed.
+        if os.environ.get("COPILOT_API_TOKEN") and (
+            access_policy is None or not access_policy.allowed_tables
+        ):
+            raise RuntimeError(
+                "Bearer-authenticated access requires COPILOT_ALLOWED_TABLES."
+            )
         if planner is not None and (
-            access_policy is None or access_policy.allowed_tables is None
+            access_policy is None or not access_policy.allowed_tables
         ):
             raise RuntimeError(
                 "Model-backed planning requires COPILOT_ALLOWED_TABLES so unauthorized "
