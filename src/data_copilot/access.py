@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
+from sqlglot.optimizer.scope import traverse_scope
 
 from data_copilot.models import TableInfo
 
@@ -40,21 +41,39 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
         raise AccessPolicyError("Authorization requires exactly one query.")
     query = statements[0]
 
-    # CTE references are local query relations, not database tables.
-    # Only physical tables must appear in the database allowlist.
-    cte_names = {
-        cte.alias_or_name.casefold()
-        for cte in query.find_all(exp.CTE)
-        if cte.alias_or_name
-    }
-    tables = {
-        table.name.casefold()
-        for table in query.find_all(exp.Table)
-        if table.name.casefold() not in cte_names
-    }
+    # Resolve SQL sources by lexical scope. A global list of CTE names is unsafe:
+    # it can mistake a physical table for a CTE declared in another scope.
+    # selected_sources distinguishes tables from nested queries and CTEs.
+    physical_tables: set[str] = set()
+    guarded = {name.casefold() for name in policy.require_where_for_tables}
+    scopes = traverse_scope(query)
+    if not scopes:
+        raise AccessPolicyError("Could not resolve SQL scopes for authorization.")
+    for scope in scopes:
+        local_tables: set[str] = set()
+        for _, source in scope.selected_sources.values():
+            if not isinstance(source, exp.Table):
+                continue
+            # An allowlist of bare table names must never authorize access to
+            # an attached database or another schema using the same table name.
+            if source.db or source.catalog:
+                raise AccessPolicyError("Schema-qualified tables are not authorized.")
+            table_name = source.name.casefold()
+            local_tables.add(table_name)
+            physical_tables.add(table_name)
+        # The WHERE must protect the physical scan in its own SELECT scope.
+        if (
+            isinstance(scope.expression, exp.Select)
+            and local_tables & guarded
+            and scope.expression.args.get("where") is None
+        ):
+            raise AccessPolicyError(
+                "Queries over guarded tables require an explicit WHERE predicate."
+            )
+
     if policy.allowed_tables is not None:
         allowed = {name.casefold() for name in policy.allowed_tables}
-        outside = sorted(tables - allowed)
+        outside = sorted(physical_tables - allowed)
         if outside:
             raise AccessPolicyError("Query references unauthorized tables: " + ", ".join(outside))
 
@@ -82,19 +101,6 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
                 "Query references denied columns: " + ", ".join(used_denied)
             )
 
-    guarded = {name.casefold() for name in policy.require_where_for_tables}
-    # Each SELECT reading a guarded table must have its own filter. An outer
-    # WHERE on a CTE/subquery does not necessarily constrain the inner scan.
-    for select in query.find_all(exp.Select):
-        local_tables = {
-            table.name.casefold()
-            for table in select.find_all(exp.Table)
-            if table.find_ancestor(exp.Select) is select
-        }
-        if local_tables & guarded and select.args.get("where") is None:
-            raise AccessPolicyError(
-                "Queries over guarded tables require an explicit WHERE predicate."
-            )
 
 
 def authorized_schema(schema: list[TableInfo], policy: AccessPolicy) -> list[TableInfo]:
