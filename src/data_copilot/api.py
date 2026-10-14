@@ -10,6 +10,7 @@ from data_copilot.access import AccessPolicy
 from data_copilot.ai_planner import OpenAICompatiblePlanner
 from data_copilot.executor import DataCopilot
 from data_copilot.safety import UnsafeQueryError
+from data_copilot.row_scope import RowScope
 
 app = FastAPI(
     title="Secure Data Copilot",
@@ -111,6 +112,28 @@ def build_access_policy() -> AccessPolicy | None:
     )
 
 
+def build_row_scope(policy: AccessPolicy | None) -> RowScope | None:
+    value = os.environ.get("COPILOT_ROW_SCOPE_VALUE")
+    column = os.environ.get("COPILOT_ROW_SCOPE_COLUMN")
+    if value is None and column is None:
+        return None
+    if not value or not column:
+        raise RuntimeError(
+            "COPILOT_ROW_SCOPE_VALUE and COPILOT_ROW_SCOPE_COLUMN "
+            "must be configured together."
+        )
+    if policy is None or not policy.allowed_tables:
+        raise RuntimeError("Row scoping requires COPILOT_ALLOWED_TABLES.")
+    try:
+        return RowScope(
+            column=column,
+            value=value,
+            tables=policy.allowed_tables,
+        )
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+
+
 protected = [Depends(require_auth)]
 
 
@@ -141,6 +164,7 @@ def ask(request: AskRequest) -> dict[str, object]:
     try:
         planner = build_planner()
         access_policy = build_access_policy()
+        row_scope = build_row_scope(access_policy)
         # Bearer-authenticated deployments must explicitly restrict database tables,
         # regardless of whether planning is deterministic or model-backed.
         if os.environ.get("COPILOT_API_TOKEN") and (
@@ -161,6 +185,7 @@ def ask(request: AskRequest) -> dict[str, object]:
             max_rows=request.max_rows,
             planner=planner,
             access_policy=access_policy,
+            row_scope=row_scope,
         ).ask(request.question)
         return asdict(result)
     except RuntimeError as error:
