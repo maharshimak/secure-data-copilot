@@ -7,10 +7,10 @@ from data_copilot.database import SQLiteCatalog
 from data_copilot.insights import summarize_rows
 from data_copilot.models import QueryAudit, QueryPlan, QueryResult, TableInfo
 from data_copilot.planner import DeterministicPlanner
-from data_copilot.row_scope import RowScope, apply_row_scope
 from data_copilot.query_budget import QueryBudget
 from data_copilot.query_budget import enforce_query_budget as enforce_complexity_budget
 from data_copilot.risk import enforce_query_budget as enforce_risk_budget
+from data_copilot.row_scope import RowScope, apply_row_scope
 
 
 class Planner(Protocol):
