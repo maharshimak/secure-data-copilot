@@ -7,6 +7,7 @@ from data_copilot.database import SQLiteCatalog
 from data_copilot.insights import summarize_rows
 from data_copilot.models import QueryAudit, QueryPlan, QueryResult, TableInfo
 from data_copilot.planner import DeterministicPlanner
+from data_copilot.row_scope import RowScope, apply_row_scope
 from data_copilot.query_budget import QueryBudget
 from data_copilot.query_budget import enforce_query_budget as enforce_complexity_budget
 from data_copilot.risk import enforce_query_budget as enforce_risk_budget
@@ -26,6 +27,7 @@ class DataCopilot:
         query_budget: QueryBudget | None = None,
         max_risk_score: int = 40,
         audit_store: JsonlAuditStore | None = None,
+        row_scope: RowScope | None = None,
     ) -> None:
         self.catalog = SQLiteCatalog(database_path)
         self.planner = planner or DeterministicPlanner()
@@ -34,6 +36,7 @@ class DataCopilot:
         self.query_budget = query_budget or QueryBudget()
         self.max_risk_score = max_risk_score
         self.audit_store = audit_store
+        self.row_scope = row_scope
 
     def ask(self, question: str) -> QueryResult:
         schema = self.catalog.schema()
@@ -42,6 +45,26 @@ class DataCopilot:
             if self.access_policy is not None
             else schema
         )
+        if self.row_scope is not None:
+            if (
+                self.access_policy is None
+                or self.access_policy.allowed_tables is None
+                or {
+                    table.casefold() for table in self.access_policy.allowed_tables
+                } != {table.casefold() for table in self.row_scope.tables}
+            ):
+                raise ValueError(
+                    "Row scope must cover every server-allowed physical table."
+                )
+            for table in schema:
+                if table.name.casefold() in {
+                    name.casefold() for name in self.row_scope.tables
+                } and self.row_scope.column.casefold() not in {
+                    column.name.casefold() for column in table.columns
+                }:
+                    raise ValueError(
+                        "Row-scope column is missing from an allowed table."
+                    )
         plan = self.planner.plan(question, planner_schema)
         if self.access_policy is not None:
             authorize_sql(plan.sql, self.access_policy)
@@ -52,8 +75,11 @@ class DataCopilot:
             max_rows=self.max_rows,
         )
 
+        parameters: tuple[str, ...] = ()
+        if self.row_scope is not None:
+            safe_sql, parameters = apply_row_scope(safe_sql, self.row_scope)
         started = perf_counter()
-        columns, rows = self.catalog.execute(safe_sql)
+        columns, rows = self.catalog.execute(safe_sql, parameters)
         duration_ms = (perf_counter() - started) * 1000
         event_id: str | None = None
         if self.audit_store is not None:
