@@ -138,14 +138,11 @@ def test_remote_row_scope_configuration_fails_closed(monkeypatch, tenant_databas
         ("SELECT MAX(amount) AS top_amount FROM orders", [5]),
         ("SELECT COUNT(*) AS customer_count FROM customers", [1]),
         (
-            "SELECT name FROM customers WHERE "
-            "EXISTS (SELECT 1 FROM orders WHERE amount > 9000)",
+            "SELECT name FROM customers WHERE EXISTS (SELECT 1 FROM orders WHERE amount > 9000)",
             [],
         ),
         (
-            "WITH outer_data AS (SELECT name FROM customers) "
-            "SELECT name FROM outer_data UNION ALL "
-            "SELECT name FROM customers",
+            "WITH outer_data AS (SELECT name FROM customers) SELECT name FROM outer_data UNION ALL SELECT name FROM customers",
             ["North Co", "North Co"],
         ),
     ],
