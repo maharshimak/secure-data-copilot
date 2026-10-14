@@ -52,9 +52,11 @@ class SQLiteCatalog:
                 )
             return result
 
-    def execute(self, sql: str) -> tuple[list[str], list[dict[str, object]]]:
+    def execute(
+        self, sql: str, parameters: tuple[str, ...] = ()
+    ) -> tuple[list[str], list[dict[str, object]]]:
         with closing(self._connect()) as connection:
-            cursor = connection.execute(sql)
+            cursor = connection.execute(sql, parameters)
             columns = [item[0] for item in cursor.description or []]
             rows = [dict(row) for row in cursor.fetchall()]
             return columns, rows
