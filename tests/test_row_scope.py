@@ -129,3 +129,65 @@ def test_remote_row_scope_configuration_fails_closed(monkeypatch, tenant_databas
     )
     assert response.status_code == 503
     assert "COPILOT_ROW_SCOPE" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "sql, expected",
+    [
+        ("SELECT name FROM customers WHERE tenant_id='south' OR 1=1", ["North Co"]),
+        ("SELECT MAX(amount) AS top_amount FROM orders", [5]),
+        ("SELECT COUNT(*) AS customer_count FROM customers", [1]),
+        (
+            "SELECT name FROM customers WHERE "
+            "EXISTS (SELECT 1 FROM orders WHERE amount > 9000)",
+            [],
+        ),
+        (
+            "WITH outer_data AS (SELECT name FROM customers) "
+            "SELECT name FROM outer_data UNION ALL "
+            "SELECT name FROM customers",
+            ["North Co", "North Co"],
+        ),
+    ],
+)
+def test_adversarial_sql_cannot_infer_other_scope(tenant_database, sql, expected):
+    result = copilot(tenant_database, sql).ask("adversarial isolation")
+    assert [next(iter(row.values())) for row in result.rows] == expected
+    assert "?" in result.audit.sql
+
+
+def test_parameter_binding_count_matches_each_rewritten_physical_scan(tenant_database):
+    sql = (
+        "SELECT c.name, o.amount FROM customers AS c "
+        "JOIN orders AS o ON o.customer_id = c.id "
+        "WHERE o.amount > 0"
+    )
+    policy = AccessPolicy(allowed_tables=frozenset({"customers", "orders"}))
+    scope = RowScope("tenant_id", "north", policy.allowed_tables)
+    rewritten, parameters = apply_row_scope(sql, scope)
+    assert rewritten.count("?") == 2
+    assert parameters == ("north", "north")
+    with sqlite3.connect(tenant_database) as connection:
+        rows = connection.execute(rewritten, parameters).fetchall()
+    assert rows == [("North Co", 5)]
+
+
+def test_cross_tenant_key_collision_does_not_augment_join(tmp_path):
+    db = tmp_path / "collision.db"
+    with sqlite3.connect(db) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE customers (id INTEGER, tenant_id TEXT, name TEXT);
+            CREATE TABLE orders (customer_id INTEGER, tenant_id TEXT, amount INTEGER);
+            INSERT INTO customers VALUES (1, 'north', 'Visible');
+            INSERT INTO customers VALUES (1, 'south', 'Hidden');
+            INSERT INTO orders VALUES (1, 'north', 7);
+            INSERT INTO orders VALUES (1, 'south', 9999);
+            """
+        )
+    result = copilot(
+        db, "SELECT c.name, SUM(o.amount) AS total "
+        "FROM customers c JOIN orders o ON c.id=o.customer_id "
+        "GROUP BY c.name",
+    ).ask("collision")
+    assert result.rows == [{"name": "Visible", "total": 7}]
