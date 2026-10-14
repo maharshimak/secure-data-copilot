@@ -64,13 +64,11 @@ def copilot(database, sql, value="north"):
             ["North Co"],
         ),
         (
-            "SELECT name FROM customers WHERE EXISTS "
-            "(SELECT 1 FROM orders WHERE amount > 100)",
+            "SELECT name FROM customers WHERE EXISTS (SELECT 1 FROM orders WHERE amount > 100)",
             [],
         ),
         (
-            "SELECT name FROM customers UNION ALL "
-            "SELECT name FROM customers",
+            "SELECT name FROM customers UNION ALL SELECT name FROM customers",
             ["North Co", "North Co"],
         ),
     ],
