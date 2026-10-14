@@ -85,6 +85,37 @@ Open `http://localhost:8000/docs`.
 }
 ```
 
+## Optional server-bound row scoping (single-scope SQLite)
+
+An operator can restrict **every allowed physical table** to one deployment-wide
+row-scope value. This is enforced after model/deterministic planning and before
+execution by wrapping each resolved table scan in a parameterized subquery,
+including scans inside CTEs, joins, aggregate queries, and nested selects.
+Both variables must be configured together:
+
+```bash
+export COPILOT_API_TOKEN="set-through-your-secret-manager"
+export COPILOT_ALLOWED_TABLES="customers,orders"
+export COPILOT_ROW_SCOPE_COLUMN="tenant_id"
+export COPILOT_ROW_SCOPE_VALUE="north"
+```
+
+Every table in `COPILOT_ALLOWED_TABLES` must contain the same configured
+scope column. Missing/partial scope configuration returns HTTP 503; absent
+columns, non-allowlisted SQL sources and planner-provided SQL parameters are
+rejected before database execution. Scope values are **bound to SQLite
+parameters**, never copied from prompts, request bodies, or generated SQL.
+The resulting audited SQL contains placeholders rather than the scope value.
+Without these two optional row-scope variables, table authorization still
+applies but **row isolation is not enabled**.
+
+**Security boundary:** This is one trusted scope per backend process. A single
+shared API bearer token is **not** user identity, per-user tenant ownership or
+database-native RLS. Do not serve multiple independently authorized tenants
+from one process/token. A production multi-tenant service needs independent
+principal authentication, server-side tenant derivation, and database-enforced
+row permissions; SQLite-only rewriting is defense in depth, not their replacement.
+
 ## Security model
 
 Only `SELECT` and `WITH ... SELECT` queries are accepted. Write, DDL, privileged, multi-statement and oversized queries are blocked before execution. Allowed queries are additionally checked against structural complexity and risk budgets before SQLite is reached. SQLite is opened in native read-only/query-only mode.
