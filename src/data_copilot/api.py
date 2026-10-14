@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from data_copilot.access import AccessPolicy
 from data_copilot.ai_planner import OpenAICompatiblePlanner
 from data_copilot.executor import DataCopilot
-from data_copilot.safety import UnsafeQueryError
 from data_copilot.row_scope import RowScope
+from data_copilot.safety import UnsafeQueryError
 
 app = FastAPI(
     title="Secure Data Copilot",
