@@ -30,6 +30,26 @@ class AccessPolicy:
             raise ValueError("max_joins must be non-negative.")
 
 
+def _obviously_true(predicate: exp.Expression) -> bool:
+    """Reject simple true constants, including TRUE branches of disjunctions.
+
+    This is a conservative syntax check, not a proof of tenant isolation.
+    """
+    if isinstance(predicate, exp.Paren):
+        return _obviously_true(predicate.this)
+    if isinstance(predicate, exp.Boolean):
+        return predicate.this is True
+    if isinstance(predicate, exp.EQ):
+        left, right = predicate.left, predicate.right
+        if isinstance(left, exp.Literal) and isinstance(right, exp.Literal):
+            return left.is_string == right.is_string and left.this == right.this
+    if isinstance(predicate, exp.Or):
+        return _obviously_true(predicate.left) or _obviously_true(predicate.right)
+    if isinstance(predicate, exp.And):
+        return _obviously_true(predicate.left) and _obviously_true(predicate.right)
+    return False
+
+
 def authorize_sql(sql: str, policy: AccessPolicy) -> None:
     """Validate table/column scope without trusting the LLM planner."""
 
@@ -62,14 +82,16 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
             local_tables.add(table_name)
             physical_tables.add(table_name)
         # The WHERE must protect the physical scan in its own SELECT scope.
-        if (
-            isinstance(scope.expression, exp.Select)
-            and local_tables & guarded
-            and scope.expression.args.get("where") is None
-        ):
-            raise AccessPolicyError(
-                "Queries over guarded tables require an explicit WHERE predicate."
-            )
+        if isinstance(scope.expression, exp.Select) and local_tables & guarded:
+            where = scope.expression.args.get("where")
+            if where is None:
+                raise AccessPolicyError(
+                    "Queries over guarded tables require an explicit WHERE predicate."
+                )
+            if _obviously_true(where.this):
+                raise AccessPolicyError(
+                    "A trivial TRUE condition cannot guard a sensitive table."
+                )
 
     if policy.allowed_tables is not None:
         allowed = {name.casefold() for name in policy.allowed_tables}
