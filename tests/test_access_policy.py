@@ -112,3 +112,31 @@ def test_guard_applies_inside_cte_even_when_outer_query_is_filtered():
             "SELECT name FROM visible WHERE name IS NOT NULL",
             policy,
         )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT name FROM customers WHERE TRUE",
+        "SELECT name FROM customers WHERE (1 = 1)",
+        "SELECT name FROM customers WHERE id = 7 OR TRUE",
+        "SELECT name FROM customers WHERE (id = 7 OR (1 = 1))",
+        "WITH c AS (SELECT name FROM customers WHERE TRUE) SELECT name FROM c",
+    ],
+)
+def test_guard_rejects_obvious_true_conditions(sql):
+    policy = AccessPolicy(
+        allowed_tables=frozenset({"customers"}),
+        require_where_for_tables=frozenset({"customers"}),
+    )
+    with pytest.raises(AccessPolicyError, match="trivial TRUE"):
+        authorize_sql(sql, policy)
+
+
+def test_guard_accepts_real_predicates_and_redundant_true_conjunction():
+    policy = AccessPolicy(
+        allowed_tables=frozenset({"customers"}),
+        require_where_for_tables=frozenset({"customers"}),
+    )
+    authorize_sql("SELECT name FROM customers WHERE id = 7", policy)
+    authorize_sql("SELECT name FROM customers WHERE 1 = 1 AND id = 7", policy)
