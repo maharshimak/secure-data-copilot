@@ -57,7 +57,15 @@ def apply_row_scope(sql: str, scope: RowScope) -> tuple[str, tuple[str, ...]]:
             if not isinstance(source, exp.Table):
                 continue
             table_name = source.name.casefold()
-            if source.db or source.catalog or table_name not in tables:
+            # Do not mistake a table-valued function or other non-identifier
+            # source for an ordinary allowed table with the same display name.
+            # Fail closed rather than attempting to rewrite unfamiliar syntax.
+            if (
+                not isinstance(source.this, exp.Identifier)
+                or source.db
+                or source.catalog
+                or table_name not in tables
+            ):
                 raise AccessPolicyError("Row scope blocked an unapproved physical table.")
             # Preserve the original table's outside alias so JOIN ON, WHERE,
             # GROUP BY and correlated references still resolve correctly.
