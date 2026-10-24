@@ -1,5 +1,3 @@
-import re
-
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
@@ -38,7 +36,9 @@ class UnsafeQueryError(ValueError):
 
 
 def normalize_sql(sql: str) -> str:
-    return re.sub(r"\s+", " ", sql.strip().rstrip(";")).strip()
+    # Whitespace belongs to string literals and terminates line comments. Keep
+    # it intact until SQLGlot parses and serializes the query structurally.
+    return sql.strip()
 
 
 def _parse_query(sql: str) -> exp.Query:
