@@ -31,6 +31,24 @@ FORBIDDEN_FUNCTIONS = {
     "readfile",
     "writefile",
 }
+# Function calls rejected at parse time in addition to FORBIDDEN_FUNCTIONS. The
+# SQLite authorizer in sqlite_guard enforces a stricter allow-list at execution;
+# this list exists so obviously hostile calls are refused before a connection opens.
+FORBIDDEN_FUNCTION_CALLS = FORBIDDEN_FUNCTIONS | {
+    "changes",
+    "edit",
+    "fts3_tokenizer",
+    "last_insert_rowid",
+    "randomblob",
+    "total_changes",
+    "zeroblob",
+}
+FORBIDDEN_FUNCTION_PREFIXES = ("sqlite_",)
+# Schema catalogs and PRAGMA table-valued functions expose metadata (including the
+# database file path) that the catalog deliberately hides from planners.
+INTERNAL_SOURCE_PREFIXES = ("sqlite_", "pragma_")
+# sqlglot parses sqlite_version() into a typed node rather than an anonymous call.
+_CURRENT_VERSION = getattr(exp, "CurrentVersion", None)
 
 
 class UnsafeQueryError(ValueError):
@@ -62,6 +80,32 @@ def _parse_query(sql: str) -> exp.Query:
         name = str(getattr(node, "name", "")).casefold()
         if name in FORBIDDEN_FUNCTIONS:
             raise UnsafeQueryError(f"Forbidden SQL function: {name}")
+
+        if _CURRENT_VERSION is not None and isinstance(node, _CURRENT_VERSION):
+            raise UnsafeQueryError("Forbidden SQL function: sqlite_version")
+        if isinstance(node, exp.Anonymous) and (
+            name in FORBIDDEN_FUNCTION_CALLS or name.startswith(FORBIDDEN_FUNCTION_PREFIXES)
+        ):
+            raise UnsafeQueryError(f"Forbidden SQL function: {name}")
+
+        if isinstance(node, exp.Table):
+            source = node.this
+            source_name = (
+                source.name if isinstance(source, exp.Func) else node.name
+            ).casefold()
+            if source_name.startswith(INTERNAL_SOURCE_PREFIXES):
+                raise UnsafeQueryError(
+                    f"SQLite internal catalogs are not queryable: {source_name}"
+                )
+
+        # sqlglot's SQLite generator drops alias column lists such as
+        # "WITH t(a, b) AS (...)", which would silently rename or reorder columns
+        # in the executed SQL. Refuse instead of executing different semantics.
+        if isinstance(node, exp.TableAlias) and node.args.get("columns"):
+            raise UnsafeQueryError(
+                "Column lists on CTE or table aliases are not supported; "
+                "alias the columns inside the query instead."
+            )
 
     return statement
 

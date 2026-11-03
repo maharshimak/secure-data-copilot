@@ -1,5 +1,6 @@
 import hashlib
 import json
+import secrets
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -7,12 +8,22 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class AuditEvent:
+    """One query decision. Never contains result values or the raw SQL text.
+
+    ``decision`` is ``allow`` when rows were returned, ``deny`` when a policy,
+    safety, budget or execution-guard check refused the query and ``error`` when the
+    query was authorized but failed (for example a timeout).
+    """
+
     event_id: str
     timestamp: str
     question: str
     sql_fingerprint: str
     duration_ms: float
     row_count: int
+    decision: str = "allow"
+    reasons: tuple[str, ...] = ()
+    stage: str = "execute"
 
 
 def sql_fingerprint(sql: str) -> str:
@@ -26,10 +37,19 @@ def build_event(
     sql: str,
     duration_ms: float,
     row_count: int,
+    decision: str = "allow",
+    reasons: tuple[str, ...] = (),
+    stage: str = "execute",
 ) -> AuditEvent:
+    if decision not in {"allow", "deny", "error"}:
+        raise ValueError("decision must be allow, deny or error")
     timestamp = datetime.now(UTC).isoformat()
-    fingerprint = sql_fingerprint(sql)
-    event_id = hashlib.sha256(f"{timestamp}:{fingerprint}".encode()).hexdigest()[:20]
+    fingerprint = sql_fingerprint(sql) if sql else ""
+    # A random component keeps identifiers unique for identical queries issued
+    # within the same clock tick.
+    event_id = hashlib.sha256(
+        f"{timestamp}:{fingerprint}:{secrets.token_hex(8)}".encode()
+    ).hexdigest()[:20]
     return AuditEvent(
         event_id=event_id,
         timestamp=timestamp,
@@ -37,6 +57,9 @@ def build_event(
         sql_fingerprint=fingerprint,
         duration_ms=duration_ms,
         row_count=row_count,
+        decision=decision,
+        reasons=tuple(reasons),
+        stage=stage,
     )
 
 

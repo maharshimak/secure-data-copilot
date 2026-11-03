@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import sqlglot
@@ -8,6 +9,10 @@ from sqlglot.errors import ParseError
 
 from data_copilot.models import TableInfo
 
+# SQLite pseudo-columns that read a table's rowid. When a table declares an
+# INTEGER PRIMARY KEY they return that column's value under a different name.
+ROWID_ALIASES = frozenset({"rowid", "_rowid_", "oid"})
+
 
 class AccessPolicyError(ValueError):
     pass
@@ -15,22 +20,54 @@ class AccessPolicyError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class AccessPolicy:
-    """Defense-in-depth authorization applied after planning and before execution."""
+    """Defense-in-depth authorization applied after planning and before execution.
+
+    ``allowed_columns`` optionally maps a table name to the only columns that may be
+    read from it. When it is set, a readable table without an entry exposes no
+    column values (fail closed). ``denied_columns`` is a global name deny list that
+    applies to every table.
+    """
 
     allowed_tables: frozenset[str] | None = None
     denied_columns: frozenset[str] = field(default_factory=frozenset)
     require_where_for_tables: frozenset[str] = field(default_factory=frozenset)
     max_joins: int = 4
+    allowed_columns: Mapping[str, frozenset[str]] | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.max_joins, bool) or not isinstance(self.max_joins, int):
             raise TypeError("max_joins must be an integer.")
         if self.max_joins < 0:
             raise ValueError("max_joins must be non-negative.")
+        if self.allowed_columns is not None:
+            if not isinstance(self.allowed_columns, Mapping):
+                raise TypeError("allowed_columns must map table names to column names.")
+            normalized: dict[str, frozenset[str]] = {}
+            for table, columns in self.allowed_columns.items():
+                if not isinstance(table, str) or not table.strip():
+                    raise ValueError("allowed_columns keys must be non-empty table names.")
+                if isinstance(columns, str):
+                    raise TypeError("allowed_columns values must be collections of names.")
+                normalized[table.casefold()] = frozenset(str(name).casefold() for name in columns)
+            object.__setattr__(self, "allowed_columns", normalized)
+
+    @property
+    def restricts_columns(self) -> bool:
+        return bool(self.denied_columns) or self.allowed_columns is not None
+
+
+def _is_count_star(star: exp.Star) -> bool:
+    # COUNT(*) counts rows without reading any column value.
+    return isinstance(star.parent, exp.Count)
 
 
 def authorize_sql(sql: str, policy: AccessPolicy) -> None:
-    """Validate table/column scope without trusting the LLM planner."""
+    """Validate table/column scope without trusting the LLM planner.
+
+    This is an early AST check. Column resolution is approximate here (aliases and
+    unqualified names are not bound to tables); the SQLite authorizer installed by
+    :mod:`data_copilot.sqlite_guard` performs the exact per-column check at execution.
+    """
 
     try:
         statements = sqlglot.parse(sql, read="sqlite")
@@ -47,25 +84,38 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
         if outside:
             raise AccessPolicyError("Query references unauthorized tables: " + ", ".join(outside))
 
-    joins = sum(1 for _ in query.find_all(exp.Join))
-    if joins > policy.max_joins:
+    joins = list(query.find_all(exp.Join))
+    if len(joins) > policy.max_joins:
         raise AccessPolicyError(
-            f"Query contains {joins} joins; policy maximum is {policy.max_joins}."
+            f"Query contains {len(joins)} joins; policy maximum is {policy.max_joins}."
         )
 
-    denied = {name.casefold() for name in policy.denied_columns}
-    if denied:
-        if any(isinstance(node, exp.Star) for node in query.walk()):
+    if policy.restricts_columns:
+        if any(
+            isinstance(node, exp.Star) and not _is_count_star(node) for node in query.walk()
+        ):
             raise AccessPolicyError(
-                "Wildcard projection is not allowed when columns are explicitly denied."
+                "Wildcard projection is not allowed when column access is restricted."
             )
-        used_denied = sorted(
-            {
-                column.name.casefold()
-                for column in query.find_all(exp.Column)
-                if column.name.casefold() in denied
-            }
-        )
+        # SQLite's authorizer does not report the columns (or even the right-hand
+        # table) of USING/NATURAL joins, so the execution guard cannot verify them.
+        for join in joins:
+            if str(join.args.get("method") or "").upper() == "NATURAL" or join.args.get(
+                "using"
+            ):
+                raise AccessPolicyError(
+                    "NATURAL and USING joins are not allowed when column access is "
+                    "restricted; use an explicit ON condition."
+                )
+        referenced = {column.name.casefold() for column in query.find_all(exp.Column)}
+        rowid_refs = sorted(referenced & ROWID_ALIASES)
+        if rowid_refs:
+            raise AccessPolicyError(
+                "rowid pseudo-columns are not allowed when column access is restricted: "
+                + ", ".join(rowid_refs)
+            )
+        denied = {name.casefold() for name in policy.denied_columns}
+        used_denied = sorted(referenced & denied)
         if used_denied:
             raise AccessPolicyError(
                 "Query references denied columns: " + ", ".join(used_denied)
@@ -91,6 +141,11 @@ def authorized_schema(schema: list[TableInfo], policy: AccessPolicy) -> list[Tab
     for table in schema:
         if allowed is not None and table.name.casefold() not in allowed:
             continue
+        column_allow = (
+            policy.allowed_columns.get(table.name.casefold(), frozenset())
+            if policy.allowed_columns is not None
+            else None
+        )
         projected.append(
             TableInfo(
                 name=table.name,
@@ -98,6 +153,7 @@ def authorized_schema(schema: list[TableInfo], policy: AccessPolicy) -> list[Tab
                     column
                     for column in table.columns
                     if column.name.casefold() not in denied
+                    and (column_allow is None or column.name.casefold() in column_allow)
                 ],
             )
         )
