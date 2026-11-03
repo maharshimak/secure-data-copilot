@@ -87,22 +87,52 @@ Open `http://localhost:8000/docs`.
 
 ## Security model
 
-Only `SELECT` and `WITH ... SELECT` queries are accepted. Write, DDL, privileged, multi-statement and oversized queries are blocked before execution. Allowed queries are additionally checked against structural complexity and risk budgets before SQLite is reached. SQLite is opened in native read-only/query-only mode.
+Planner output, including SQL from a model, is treated as untrusted. Every statement passes these layers in order; each one can refuse it on its own:
 
-This is defense in depth, not a claim that AST validation alone is a complete SQL sandbox. The parser boundary is combined with SQLite native read-only/query-only mode, a progress deadline and a bounded outer result. A production PostgreSQL version should additionally use a dedicated least-privilege database role and row/column authorization.
+| Layer | Where | What it enforces |
+| --- | --- | --- |
+| Table/column policy (AST) | `access.py` | `allowed_tables`, `allowed_columns`, `denied_columns`, guarded tables need a top-level `WHERE`, join cap. When column access is restricted it also refuses `*` (except `COUNT(*)`), `rowid`/`_rowid_`/`oid`, and `NATURAL`/`USING` joins. |
+| Complexity budget | `query_budget.py` | Joins, subqueries, CTEs, function calls and distinct tables. |
+| SQL safety (AST) | `safety.py` | Exactly one query expression; no write/DDL/admin nodes; no `load_extension`, `readfile`, `writefile`, `edit`, `fts3_tokenizer`, `randomblob`, `zeroblob`, `changes()`-style or `sqlite_*` functions; no `sqlite_*` catalogs or `pragma_*` table-valued functions; no CTE/alias column lists (sqlglot would drop them and change the query's meaning). |
+| Risk budget | `risk.py` | Lexical risk score (wildcards, cross joins, unions, nesting, comments). |
+| Row cap | `safety.py` | The canonical query is wrapped in an outer `LIMIT max_rows` (1 to 1000). |
+| SQLite authorizer | `sqlite_guard.py` | `set_authorizer` callback invoked by SQLite while compiling the statement, with the table and column it actually resolved (after `*` expansion, unqualified names, aliases, subqueries, CTEs and rowid aliases). Only `SELECT`, reads of catalog-discovered user tables/columns permitted by the policy, and an allow-list of functions are accepted; everything else, including views, `sqlite_*` tables, `pragma_*` functions, recursive CTEs, `ATTACH` and all writes, is denied. |
+| Connection limits | `sqlite_guard.py`, `database.py` | `mode=ro` URI, `PRAGMA query_only`, `trusted_schema=OFF`, `SQLITE_DBCONFIG_DEFENSIVE`, `SQLITE_LIMIT_ATTACHED=0`, a 1,000,000-byte value limit, SQL length/expression depth/compound-select limits, a progress-handler deadline (default 2 s) and an 8 MiB result byte budget. |
+
+Known gap handled at the AST layer: SQLite does not report the join columns of `USING`/`NATURAL` joins to the authorizer, so those joins are refused whenever column access is restricted.
+
+`tests/test_adversarial_matrix.py` runs 74 attack queries (unauthorized tables and columns, missing tenant predicate, nested queries, comment/whitespace variants, multi-statement, forbidden functions, expensive queries and write/admin attempts) through the full pipeline and asserts each one is refused and the database file is unchanged. A second matrix of 20 raw statements is sent straight to SQLite with only the authorizer installed.
+
+This is defense in depth, not a proof that the SQL surface is sandboxed. A production PostgreSQL version should still use a least-privilege database role and database-native row-level security.
+
+### Audit records
+
+When `COPILOT_AUDIT_LOG_PATH` is set (or a `JsonlAuditStore` is passed to `DataCopilot`), every decision is appended as one JSON line: event id, timestamp, question, SHA-256 fingerprint of the normalized SQL, decision (`allow`, `deny`, `error`), stage (`authorization`, `execution_guard`, `sql_safety`, `complexity_budget`, `result_budget`, `timeout`, `planning`, ...), reasons, duration and row count. Raw SQL text and result values are never written. The question text is recorded as submitted.
+
+## makma.v1 operations
+
+`data_copilot.contracts.run_operation(operation, payload, *, run_id=None, correlation_id=None)` returns the shared `makma.v1` envelope (`contracts/makma.v1.schema.json`). The same operations are served at `GET /v1/capabilities` and `POST /v1/ops/{operation}` behind the existing API authentication. The database path, policy and planner always come from server configuration, never from the payload.
+
+| Operation | Input | `data` | `execution_mode` |
+| --- | --- | --- | --- |
+| `describe_schema` | `{}` | Authorized tables/columns and guarded tables | `deterministic_offline` |
+| `validate_sql` | `sql`, `max_rows` | `allowed`, `stage`, `reasons`, SQL fingerprint, risk and complexity scores. Runs every layer above and compiles the statement with `EXPLAIN` under the authorizer; no rows are read. `policy.decision` is `allow` or `deny`. | `deterministic_offline` |
+| `query` | exactly one of `question` or `sql`, plus `max_rows` | `columns`, `rows` (blobs as `hex:...`), `row_count`, `audit_event_id`, SHA-256 of the executed SQL, risk/complexity scores, planner rationale, numeric insights | `deterministic_offline` for SQL input or the deterministic planner; `local_model` / `remote_model` when a model planner on a loopback / other host produced the SQL |
+
+A refused `query` returns `status: "blocked"` and `error.code: "POLICY_DENIED"` with the stage and reasons (HTTP 403). Other codes: `UNKNOWN_OPERATION` (404), `INVALID_INPUT` (422), `NOT_CONFIGURED` and `CONFIGURATION_ERROR` (503), `QUERY_TIMEOUT` (408), `PLANNING_FAILED`, `QUERY_FAILED`, `INTERNAL_ERROR`.
 
 ## Roadmap
 
 - PostgreSQL adapter
 - semantic business metrics layer
-- row/column-level authorization
+- row-level authorization
 - chart specifications
 - query-result caching
 - OpenTelemetry traces
 
 ## Scope and limitations
 
-SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It is local-only by default and supports bearer-authenticated remote access. Optional table/column authorization can restrict the schema visible to a model-backed planner and is re-checked against the generated SQL before execution; true user/role identity, row-level security and multi-tenant ownership remain future work. Planner templates still target a small demo schema rather than arbitrary business reasoning. Query audit metadata is returned; the optional JSONL audit utility is not wired into the request path.
+SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It is local-only by default and supports bearer-authenticated remote access. Optional table/column authorization restricts the schema visible to a model-backed planner, is re-checked on the generated SQL's AST and is enforced again by the SQLite authorizer at compile time. Only base tables reported by the catalog are queryable: views and recursive CTEs are refused by the authorizer even without a policy. The guarded-table check only requires a top-level `WHERE`; it does not prove tenant isolation. True user/role identity, row-level security and multi-tenant ownership remain future work. Planner templates still target a small demo schema rather than arbitrary business reasoning. Audit records are written only when `COPILOT_AUDIT_LOG_PATH` is set.
 
 ## Installation and development
 
@@ -132,7 +162,7 @@ Run `python examples/bootstrap_demo.py` first to create the synthetic database.
 
 ## Configuration
 
-See [.env.example](.env.example). Export variables into the process environment; the application does not automatically load that file. Keep real credentials out of Git.
+See [.env.example](.env.example). Policy variables: `COPILOT_ALLOWED_TABLES`, `COPILOT_ALLOWED_COLUMNS` (comma-separated `table.column`), `COPILOT_DENIED_COLUMNS`, `COPILOT_GUARDED_TABLES`, `COPILOT_MAX_JOINS`; audit: `COPILOT_AUDIT_LOG_PATH`. Export variables into the process environment; the application does not automatically load that file. Keep real credentials out of Git.
 
 ## Service and API schema
 
@@ -163,7 +193,7 @@ The service returns 503 until a database is configured. Mount a synthetic databa
 
 ## Next engineering work
 
-Database roles and row-level authorization; authenticated dataset selection; persistent audit storage; PostgreSQL adapter; database-native query-cost estimation. These are planned work, not current capabilities.
+Database roles and row-level authorization; authenticated dataset selection; durable audit storage beyond a local JSONL file; CSV export with formula-injection protection in the Python backend; PostgreSQL adapter; database-native query-cost estimation. These are planned work, not current capabilities.
 
 ## Contributing and security
 
