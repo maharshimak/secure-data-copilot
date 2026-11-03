@@ -6,10 +6,16 @@ from dataclasses import asdict
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from data_copilot.access import AccessPolicy
-from data_copilot.ai_planner import OpenAICompatiblePlanner
+from data_copilot.config import (
+    access_policy_configured,
+    build_access_policy,
+    build_audit_store,
+    build_planner,
+)
 from data_copilot.executor import DataCopilot
 from data_copilot.safety import UnsafeQueryError
+
+__all__ = ["app", "build_access_policy", "build_planner"]
 
 app = FastAPI(
     title="Secure Data Copilot",
@@ -63,54 +69,6 @@ async def require_auth(
         )
 
 
-def build_planner() -> OpenAICompatiblePlanner | None:
-    base_url = os.environ.get("COPILOT_MODEL_BASE_URL", "").strip()
-    model = os.environ.get("COPILOT_MODEL", "").strip()
-    if not base_url and not model:
-        return None
-    if not base_url or not model:
-        raise RuntimeError(
-            "COPILOT_MODEL_BASE_URL and COPILOT_MODEL must be configured together."
-        )
-    try:
-        timeout_seconds = float(os.environ.get("COPILOT_MODEL_TIMEOUT_SECONDS", "45"))
-    except ValueError as error:
-        raise RuntimeError("COPILOT_MODEL_TIMEOUT_SECONDS must be numeric.") from error
-    return OpenAICompatiblePlanner(
-        base_url=base_url,
-        model=model,
-        api_key=os.environ.get("COPILOT_MODEL_API_KEY", ""),
-        timeout_seconds=timeout_seconds,
-    )
-
-
-def _csv_set(name: str) -> frozenset[str]:
-    return frozenset(
-        item.strip()
-        for item in os.environ.get(name, "").split(",")
-        if item.strip()
-    )
-
-
-def build_access_policy() -> AccessPolicy | None:
-    allowed = _csv_set("COPILOT_ALLOWED_TABLES")
-    denied = _csv_set("COPILOT_DENIED_COLUMNS")
-    guarded = _csv_set("COPILOT_GUARDED_TABLES")
-    raw_max_joins = os.environ.get("COPILOT_MAX_JOINS", "").strip()
-    if not allowed and not denied and not guarded and not raw_max_joins:
-        return None
-    try:
-        max_joins = int(raw_max_joins or "4")
-    except ValueError as error:
-        raise RuntimeError("COPILOT_MAX_JOINS must be an integer.") from error
-    return AccessPolicy(
-        allowed_tables=allowed or None,
-        denied_columns=denied,
-        require_where_for_tables=guarded,
-        max_joins=max_joins,
-    )
-
-
 protected = [Depends(require_auth)]
 
 
@@ -124,12 +82,7 @@ def health() -> dict[str, object]:
             and os.environ.get("COPILOT_MODEL")
             else "deterministic"
         ),
-        "access_policy_configured": bool(
-            os.environ.get("COPILOT_ALLOWED_TABLES")
-            or os.environ.get("COPILOT_DENIED_COLUMNS")
-            or os.environ.get("COPILOT_GUARDED_TABLES")
-            or os.environ.get("COPILOT_MAX_JOINS")
-        ),
+        "access_policy_configured": access_policy_configured(),
     }
 
 
@@ -153,6 +106,7 @@ def ask(request: AskRequest) -> dict[str, object]:
             max_rows=request.max_rows,
             planner=planner,
             access_policy=access_policy,
+            audit_store=build_audit_store(),
         ).ask(request.question)
         return asdict(result)
     except RuntimeError as error:
