@@ -2,8 +2,10 @@ import os
 import secrets
 import sqlite3
 from dataclasses import asdict
+from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from data_copilot.config import (
@@ -12,6 +14,7 @@ from data_copilot.config import (
     build_audit_store,
     build_planner,
 )
+from data_copilot.contracts import capabilities, http_status_for, run_operation
 from data_copilot.executor import DataCopilot
 from data_copilot.safety import UnsafeQueryError
 
@@ -118,3 +121,18 @@ def ask(request: AskRequest) -> dict[str, object]:
             status_code=400,
             detail="Database query could not be completed.",
         ) from error
+
+
+@app.get("/v1/capabilities", dependencies=protected)
+def get_capabilities() -> dict[str, object]:
+    return capabilities()
+
+
+@app.post("/v1/ops/{operation}", dependencies=protected)
+def post_operation(
+    operation: str,
+    payload: Annotated[dict[str, Any] | None, Body()] = None,
+    x_correlation_id: Annotated[str | None, Header()] = None,
+) -> JSONResponse:
+    envelope = run_operation(operation, payload or {}, correlation_id=x_correlation_id)
+    return JSONResponse(status_code=http_status_for(envelope), content=envelope)
