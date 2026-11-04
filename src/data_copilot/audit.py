@@ -53,12 +53,12 @@ def build_event(
     return AuditEvent(
         event_id=event_id,
         timestamp=timestamp,
-        question=question,
+        question="",
         sql_fingerprint=fingerprint,
         duration_ms=duration_ms,
         row_count=row_count,
         decision=decision,
-        reasons=tuple(reasons),
+        reasons=(stage,) if reasons else (),
         stage=stage,
     )
 

@@ -107,7 +107,7 @@ This is defense in depth, not a proof that the SQL surface is sandboxed. A produ
 
 ### Audit records
 
-When `COPILOT_AUDIT_LOG_PATH` is set (or a `JsonlAuditStore` is passed to `DataCopilot`), every decision is appended as one JSON line: event id, timestamp, question, SHA-256 fingerprint of the normalized SQL, decision (`allow`, `deny`, `error`), stage (`authorization`, `execution_guard`, `sql_safety`, `complexity_budget`, `result_budget`, `timeout`, `planning`, ...), reasons, duration and row count. Raw SQL text and result values are never written. The question text is recorded as submitted.
+When the JSONL audit store is configured, events record the event ID, timestamp, SQL fingerprint, decision, stage, duration and row count. Persisted diagnostics use stable stage labels. The question field is empty for compatibility with existing readers. The SQL fingerprint is for correlation and should be kept within the audit access boundary.
 
 ## makma.v1 operations
 
@@ -132,7 +132,11 @@ A refused `query` returns `status: "blocked"` and `error.code: "POLICY_DENIED"` 
 
 ## Scope and limitations
 
-SQL policy is parsed with `sqlglot` and rejects non-query statements, forbidden administrative/write nodes and dangerous SQLite file/extension functions. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It is local-only by default and supports bearer-authenticated remote access. Optional table/column authorization restricts the schema visible to a model-backed planner, is re-checked on the generated SQL's AST and is enforced again by the SQLite authorizer at compile time. Only base tables reported by the catalog are queryable: views and recursive CTEs are refused by the authorizer even without a policy. The guarded-table check only requires a top-level `WHERE`; it does not prove tenant isolation. True user/role identity, row-level security and multi-tenant ownership remain future work. Planner templates still target a small demo schema rather than arbitrary business reasoning. Audit records are written only when `COPILOT_AUDIT_LOG_PATH` is set.
+The SQLite authorizer rechecks the tables, columns and functions resolved at compile time. SQLite connections use read-only mode, query-only mode, a progress deadline and result limits. Ordinary base tables appear in the catalog. Persistent views, virtual tables and shadow tables are excluded. Both the natural-language and direct-SQL APIs use the same authorization and execution gates. SQLite's double-quoted string fallback is disabled so an unresolved quoted column is rejected.
+
+Configure `COPILOT_ROW_SCOPE_COLUMN` and `COPILOT_ROW_SCOPE_VALUE` together with `COPILOT_ALLOWED_TABLES` for one fixed text scope per server. A public temporary view exposes the authorized columns through a private filtered view with an exact binary text comparison. Only the private view can authorize reads from the backing table. Caller SQL cannot name that connection’s private views, and scoped catalog calls reject implicit `NATURAL` and `USING` joins. If SQLite cannot distinguish a row-only read from an unauthorized unnamed column, the authorizer denies it. Tables missing the scope column are unavailable.
+
+The server chooses the scope and ignores caller tenant headers. With a bearer token, an explicit table allowlist is required, and `COPILOT_GUARDED_TABLES` requires an explicit row scope. The guarded-table option checks query shape. A shared bearer token identifies no individual tenant. Use a dedicated database or fixed scope for each security domain until authenticated tenant ownership is available.
 
 ## Installation and development
 
@@ -162,7 +166,7 @@ Run `python examples/bootstrap_demo.py` first to create the synthetic database.
 
 ## Configuration
 
-See [.env.example](.env.example). Policy variables: `COPILOT_ALLOWED_TABLES`, `COPILOT_ALLOWED_COLUMNS` (comma-separated `table.column`), `COPILOT_DENIED_COLUMNS`, `COPILOT_GUARDED_TABLES`, `COPILOT_MAX_JOINS`; audit: `COPILOT_AUDIT_LOG_PATH`. Export variables into the process environment; the application does not automatically load that file. Keep real credentials out of Git.
+See [.env.example](.env.example). Policy variables: `COPILOT_ALLOWED_TABLES`, `COPILOT_ALLOWED_COLUMNS` (comma-separated `table.column`), `COPILOT_DENIED_COLUMNS`, `COPILOT_GUARDED_TABLES`, `COPILOT_MAX_JOINS`, `COPILOT_ROW_SCOPE_COLUMN`, `COPILOT_ROW_SCOPE_VALUE`; audit: `COPILOT_AUDIT_LOG_PATH`. Export variables into the process environment; the application does not automatically load that file. Keep real credentials out of Git.
 
 ## Service and API schema
 
@@ -170,7 +174,7 @@ See [.env.example](.env.example). Policy variables: `COPILOT_ALLOWED_TABLES`, `C
 python -m uvicorn data_copilot.api:app --host 127.0.0.1 --port 8000
 ```
 
-Interactive endpoint schemas are at `http://127.0.0.1:8000/docs`; machine-readable schemas are at `/openapi.json`. The API is local-only by default. Set `COPILOT_API_TOKEN` to enable bearer-authenticated remote access. Set `COPILOT_MODEL_BASE_URL` and `COPILOT_MODEL` together to activate the guarded OpenAI-compatible planner; generated SQL still passes through the same AST policy and query-only database boundary.
+Interactive endpoint schemas are at `http://127.0.0.1:8000/docs`; machine-readable schemas are at `/openapi.json`. The API is local-only by default. Set `COPILOT_API_TOKEN` to enable bearer-authenticated remote access. Set `COPILOT_MODEL_BASE_URL` and `COPILOT_MODEL` together to activate the guarded OpenAI-compatible planner. Use the final HTTPS base URL for remote planners. Loopback development can use HTTP. The planner refuses redirects, and generated SQL passes through the AST policy and read-only database boundary.
 
 ## Container
 

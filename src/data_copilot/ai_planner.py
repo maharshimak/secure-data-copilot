@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from urllib import request
+from urllib import error, request
+from urllib.parse import urlsplit
 
 from data_copilot.models import QueryPlan, TableInfo
+
+LOCAL_MODEL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+class _NoRedirect(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise error.HTTPError(req.full_url, code, "Planner redirects are disabled", headers, fp)
 
 
 def _schema_payload(schema: list[TableInfo]) -> list[dict[str, object]]:
@@ -37,6 +45,12 @@ class OpenAICompatiblePlanner:
     def __post_init__(self) -> None:
         if not self.base_url.strip() or not self.model.strip():
             raise ValueError("base_url and model are required")
+        parsed = urlsplit(self.base_url)
+        local_http = parsed.scheme == "http" and parsed.hostname in LOCAL_MODEL_HOSTS
+        if not parsed.hostname or (parsed.scheme != "https" and not local_http):
+            raise ValueError("Model endpoint must use HTTPS except on loopback.")
+        if parsed.username is not None or parsed.query or parsed.fragment:
+            raise ValueError("Model endpoint must be a base URL without credentials or a query.")
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
 
@@ -79,7 +93,8 @@ class OpenAICompatiblePlanner:
             headers=headers,
             method="POST",
         )
-        with request.urlopen(req, timeout=self.timeout_seconds) as response:
+        opener = request.build_opener(_NoRedirect())
+        with opener.open(req, timeout=self.timeout_seconds) as response:
             body = json.loads(response.read().decode())
 
         data = json.loads(str(body["choices"][0]["message"]["content"]).strip())

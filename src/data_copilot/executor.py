@@ -134,10 +134,11 @@ class DataCopilot:
         try:
             safe_sql, risk, complexity = self._enforce(sql)
             self.catalog.prepare(safe_sql, self._guard(self.catalog.schema()))
-        except POLICY_ERRORS as error:
+        except (*POLICY_ERRORS, sqlite3.DatabaseError) as error:
             decision = SqlDecision(
                 allowed=False,
-                stage=failure_stage(error),
+                stage="sqlite_compile" if isinstance(error, sqlite3.DatabaseError)
+                else failure_stage(error),
                 reasons=failure_reasons(error),
                 sql_fingerprint=fingerprint,
             )

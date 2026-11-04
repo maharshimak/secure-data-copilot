@@ -24,7 +24,9 @@ class QueryTimeoutError(ValueError):
 
 
 def _value_size(value: object) -> int:
-    if isinstance(value, (bytes, str)):
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    if isinstance(value, bytes):
         return len(value)
     return 8
 
@@ -53,11 +55,15 @@ class SQLiteCatalog:
 
     def _connect(self) -> sqlite3.Connection:
         uri = Path(self.database_path).resolve().as_uri() + "?mode=ro"
-        connection = sqlite3.connect(uri, uri=True)
-        connection.execute("PRAGMA query_only = ON")
-        connection.execute("PRAGMA trusted_schema = OFF")
-        apply_connection_limits(connection, max_value_bytes=self.max_value_bytes)
-        connection.row_factory = sqlite3.Row
+        connection = sqlite3.connect(uri, uri=True, timeout=self.timeout_seconds)
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("PRAGMA trusted_schema = OFF")
+            apply_connection_limits(connection, max_value_bytes=self.max_value_bytes)
+            connection.row_factory = sqlite3.Row
+        except BaseException:
+            connection.close()
+            raise
         return connection
 
     @staticmethod
@@ -71,9 +77,9 @@ class SQLiteCatalog:
             tables = connection.execute(
                 """
                 SELECT name
-                FROM sqlite_master
-                WHERE type = 'table'
-                  AND name NOT LIKE 'sqlite_%'
+                FROM pragma_table_list
+                WHERE schema = 'main' AND type = 'table'
+                  AND lower(substr(name, 1, 7)) <> 'sqlite_'
                 ORDER BY name
                 """
             ).fetchall()
@@ -82,7 +88,9 @@ class SQLiteCatalog:
             for table in tables:
                 name = table["name"]
                 escaped = name.replace('"', '""')
-                columns = connection.execute(f'PRAGMA table_info("{escaped}")').fetchall()
+                # table_info omits generated columns, including unnamed columns
+                # whose reads SQLite reports identically to COUNT(*).
+                columns = connection.execute(f'PRAGMA table_xinfo("{escaped}")').fetchall()
                 result.append(
                     TableInfo(
                         name=name,
@@ -123,7 +131,7 @@ class SQLiteCatalog:
 
         with closing(self._connect()) as connection:
             if guard is not None:
-                connection.set_authorizer(guard)
+                guard.install(connection, sql=sql)
             self._arm_deadline(connection, self.timeout_seconds)
             rows: list[dict[str, object]] = []
             total = 0
@@ -153,7 +161,7 @@ class SQLiteCatalog:
         """
 
         with closing(self._connect()) as connection:
-            connection.set_authorizer(guard)
+            guard.install(connection, sql=sql)
             self._arm_deadline(connection, self.timeout_seconds)
             try:
                 connection.execute("EXPLAIN " + sql).fetchall()
