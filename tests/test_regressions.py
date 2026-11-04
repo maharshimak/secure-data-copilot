@@ -1,4 +1,6 @@
+import os
 import sqlite3
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,8 +21,9 @@ from data_copilot.safety import validate_read_only
     ],
 )
 def test_limit_enforced_on_actual_result(tmp_path, sql):
-    path = tmp_path / "data?#.db"
-    with sqlite3.connect(path) as db:
+    # Both names require URI escaping. Windows disallows a literal question mark.
+    path = tmp_path / ("data%?#.db" if os.name != "nt" else "data%#.db")
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute("CREATE TABLE items (id INTEGER)")
         db.executemany("INSERT INTO items VALUES (?)", [(i,) for i in range(100)])
     _, rows = SQLiteCatalog(str(path)).execute(validate_read_only(sql, 3))

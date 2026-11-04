@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 import sqlglot
@@ -86,22 +86,29 @@ def _is_count_star(star: exp.Star) -> bool:
     return isinstance(star.parent, exp.Count)
 
 
-def authorize_sql(sql: str, policy: AccessPolicy) -> None:
-    """Validate table/column scope without trusting the LLM planner.
-
-    This is an early AST check. Column resolution is approximate here (aliases and
-    unqualified names are not bound to tables); the SQLite authorizer installed by
-    :mod:`data_copilot.sqlite_guard` performs the exact per-column check at execution.
-    """
-
+def parse_authorization_query(sql: str) -> exp.Query:
     try:
         statements = sqlglot.parse(sql, read="sqlite")
     except SqlglotError as error:
         raise AccessPolicyError("SQL could not be parsed for authorization.") from error
     if len(statements) != 1 or not isinstance(statements[0], exp.Query):
         raise AccessPolicyError("Authorization requires exactly one query.")
-    query = statements[0]
+    return statements[0]
 
+
+def reject_implicit_joins(joins: Iterable[exp.Join]) -> None:
+    # SQLite can omit implicit join reads from its authorizer callbacks.
+    for join in joins:
+        if str(join.args.get("method") or "").upper() == "NATURAL" or join.args.get("using"):
+            raise AccessPolicyError(
+                "NATURAL and USING joins are not allowed by the access policy; "
+                "use an explicit ON condition."
+            )
+
+
+def authorize_sql(sql: str, policy: AccessPolicy) -> None:
+    """Check query shape before SQLite resolves individual table and column reads."""
+    query = parse_authorization_query(sql)
     try:
         cte_references = {
             id(node)
@@ -129,13 +136,7 @@ def authorize_sql(sql: str, policy: AccessPolicy) -> None:
         )
 
     if policy.restricts_columns or policy.allowed_tables is not None:
-        # SQLite can omit implicit join reads from its authorizer callbacks.
-        for join in joins:
-            if str(join.args.get("method") or "").upper() == "NATURAL" or join.args.get("using"):
-                raise AccessPolicyError(
-                    "NATURAL and USING joins are not allowed by the access policy; "
-                    "use an explicit ON condition."
-                )
+        reject_implicit_joins(joins)
 
     if policy.restricts_columns:
         if any(

@@ -12,9 +12,12 @@ closed instead of reading data.
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+
+from sqlglot import exp
 
 from data_copilot.access import (
     ROWID_ALIASES,
@@ -22,6 +25,8 @@ from data_copilot.access import (
     AccessPolicyError,
     RowScope,
     authorized_schema,
+    parse_authorization_query,
+    reject_implicit_joins,
     sqlite_name,
 )
 from data_copilot.models import TableInfo
@@ -99,6 +104,8 @@ class ExecutionGuard:
     denials: list[str] = field(default_factory=list)
     row_scope: RowScope | None = None
     scoped_tables: tuple[TableInfo, ...] = ()
+    ambiguous_empty_reads: frozenset[str] = frozenset()
+    _scope_sources: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     @classmethod
     def from_schema(
@@ -143,8 +150,16 @@ class ExecutionGuard:
             if policy is not None
             else frozenset()
         )
+        ambiguous_empty_reads = frozenset(
+            key
+            for table in schema
+            if (key := sqlite_name(table.name)) in readable
+            and any(column.name == "" for column in table.columns)
+            and ("" in denied or ((columns := readable[key]) is not None and "" not in columns))
+        )
         return cls(
             readable_tables=readable,
+            ambiguous_empty_reads=ambiguous_empty_reads,
             denied_columns=denied,
             allowed_functions=frozenset(sqlite_name(name) for name in allowed_functions),
             row_scope=policy.row_scope if policy else None,
@@ -152,8 +167,13 @@ class ExecutionGuard:
             else (),
         )
 
-    def install(self, connection: sqlite3.Connection) -> None:
+    def install(self, connection: sqlite3.Connection, *, sql: str) -> None:
         if self.row_scope is not None:
+            try:
+                reject_implicit_joins(parse_authorization_query(sql).find_all(exp.Join))
+            except AccessPolicyError as error:
+                raise ExecutionDenied((str(error),)) from error
+            caller_sql = sqlite_name(sql)
             # The database file is opened mode=ro. Only these trusted TEMP views
             # are created before query_only and the authorizer are installed.
             connection.execute("PRAGMA query_only = OFF")
@@ -163,16 +183,27 @@ class ExecutionGuard:
                 literal = connection.execute(
                     "SELECT quote(?)", (self.row_scope.value,)
                 ).fetchone()[0]
-                for table in self.scoped_tables:
+                # SQLite can report an explicitly materialized CTE as the
+                # authorizer source. Keep trusted source names connection-private,
+                # and expose stable names through separate facade views.
+                self._scope_sources.clear()
+                nonce = secrets.token_hex(16)
+                for index, table in enumerate(self.scoped_tables):
                     name = _quote_identifier(table.name)
+                    private_name = f"__copilot_scope_{nonce}_{index}"
+                    if private_name in caller_sql:
+                        raise ExecutionDenied(("statement references a private scope source",))
+                    private = _quote_identifier(private_name)
                     scope_column = _quote_identifier(self.row_scope.column)
                     columns = ", ".join(_quote_identifier(c.name) for c in table.columns)
                     projection = columns or 'NULL AS "__copilot_no_columns"'
                     connection.execute(
-                        f"CREATE TEMP VIEW {name} AS SELECT {projection} FROM main.{name} "
+                        f"CREATE TEMP VIEW {private} AS SELECT {projection} FROM main.{name} "
                         f"WHERE typeof({scope_column}) = 'text' "
                         f"AND {scope_column} COLLATE BINARY = {literal}"
                     )
+                    connection.execute(f"CREATE TEMP VIEW {name} AS SELECT * FROM temp.{private}")
+                    self._scope_sources[private_name] = sqlite_name(table.name)
             finally:
                 connection.execute("PRAGMA query_only = ON")
         connection.set_authorizer(self)
@@ -208,10 +239,14 @@ class ExecutionGuard:
     ) -> int:
         table_key = sqlite_name(table)
         column_key = sqlite_name(column)
+        if self.row_scope is not None and db_name == "temp" and table_key in self._scope_sources:
+            if sqlite_name(source or "") == self._scope_sources[table_key]:
+                return sqlite3.SQLITE_OK
+            return self._deny("internal scope views are not directly readable")
         if table_key not in self.readable_tables:
             return self._deny(f"table {table} is not readable")
         if self.row_scope is not None:
-            if db_name == "main" and source == table:
+            if db_name == "main" and self._scope_sources.get(source or "") == table_key:
                 if column_key == sqlite_name(self.row_scope.column):
                     return sqlite3.SQLITE_OK
             elif db_name != "temp":
@@ -221,8 +256,9 @@ class ExecutionGuard:
         elif db_name not in (None, "main"):
             return self._deny(f"schema {db_name} is not readable")
         if not column:
-            # SQLite reports an empty column when a table is touched without reading
-            # a value from it (for example COUNT(*)); table access is authorized above.
+            # COUNT(*) and a real column named "" have identical callbacks.
+            if self.row_scope is None and table_key in self.ambiguous_empty_reads:
+                return self._deny("ambiguous read of an unnamed column")
             return sqlite3.SQLITE_OK
         if column_key in self.denied_columns:
             return self._deny(f"column {table}.{column} is denied")
