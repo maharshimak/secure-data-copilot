@@ -32,7 +32,7 @@ def assess_query_risk(sql: str) -> QueryRisk:
     add(select_count > 1, min(24, (select_count - 1) * 12), "nested query")
     add("--" in normalized or "/*" in normalized, 10, "SQL comments")
     add(bool(re.search(r"\border\s+by\s+random\s*\(", lowered)), 20, "random ordering")
-    add(lowered.startswith("with "), 8, "CTE")
+    add(bool(re.match(r"with\b", lowered)), 8, "CTE")
 
     score = min(score, 100)
     level = "low" if score < 20 else "medium" if score < 50 else "high"
