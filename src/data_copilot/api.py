@@ -11,11 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from data_copilot.config import (
     access_policy_configured,
     build_access_policy,
-    build_audit_store,
+    build_copilot,
     build_planner,
 )
 from data_copilot.contracts import capabilities, http_status_for, run_operation
-from data_copilot.executor import DataCopilot
 from data_copilot.safety import UnsafeQueryError
 
 __all__ = ["app", "build_access_policy", "build_planner"]
@@ -91,28 +90,10 @@ def health() -> dict[str, object]:
 
 @app.post("/v1/ask", dependencies=protected)
 def ask(request: AskRequest) -> dict[str, object]:
-    database_path = os.environ.get("COPILOT_DATABASE_PATH")
-    if not database_path:
-        raise HTTPException(status_code=503, detail="No server database configured.")
     try:
-        planner = build_planner()
-        access_policy = build_access_policy()
-        if planner is not None and (
-            access_policy is None or access_policy.allowed_tables is None
-        ):
-            raise RuntimeError(
-                "Model-backed planning requires COPILOT_ALLOWED_TABLES so unauthorized "
-                "schema metadata is never disclosed to the model provider."
-            )
-        result = DataCopilot(
-            database_path=database_path,
-            max_rows=request.max_rows,
-            planner=planner,
-            access_policy=access_policy,
-            audit_store=build_audit_store(),
-        ).ask(request.question)
+        result = build_copilot(request.max_rows, planner=build_planner()).ask(request.question)
         return asdict(result)
-    except RuntimeError as error:
+    except (LookupError, RuntimeError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except (ValueError, UnsafeQueryError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -121,6 +102,8 @@ def ask(request: AskRequest) -> dict[str, object]:
             status_code=400,
             detail="Database query could not be completed.",
         ) from error
+    except OSError as error:
+        raise HTTPException(status_code=502, detail="Planner request failed.") from error
 
 
 @app.get("/v1/capabilities", dependencies=protected)

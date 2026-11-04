@@ -9,12 +9,10 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
-from data_copilot.access import AccessPolicy
-from data_copilot.ai_planner import OpenAICompatiblePlanner
+from data_copilot.access import AccessPolicy, RowScope
+from data_copilot.ai_planner import LOCAL_MODEL_HOSTS, OpenAICompatiblePlanner
 from data_copilot.audit import JsonlAuditStore
 from data_copilot.executor import DataCopilot
-
-LOCAL_MODEL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def build_planner() -> OpenAICompatiblePlanner | None:
@@ -30,12 +28,15 @@ def build_planner() -> OpenAICompatiblePlanner | None:
         timeout_seconds = float(os.environ.get("COPILOT_MODEL_TIMEOUT_SECONDS", "45"))
     except ValueError as error:
         raise RuntimeError("COPILOT_MODEL_TIMEOUT_SECONDS must be numeric.") from error
-    return OpenAICompatiblePlanner(
-        base_url=base_url,
-        model=model,
-        api_key=os.environ.get("COPILOT_MODEL_API_KEY", ""),
-        timeout_seconds=timeout_seconds,
-    )
+    try:
+        return OpenAICompatiblePlanner(
+            base_url=base_url,
+            model=model,
+            api_key=os.environ.get("COPILOT_MODEL_API_KEY", ""),
+            timeout_seconds=timeout_seconds,
+        )
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
 
 
 def planner_execution_mode(planner: OpenAICompatiblePlanner | None) -> str:
@@ -75,6 +76,19 @@ def build_access_policy() -> AccessPolicy | None:
     denied = _csv_set("COPILOT_DENIED_COLUMNS")
     guarded = _csv_set("COPILOT_GUARDED_TABLES")
     allowed_columns = _allowed_columns()
+    scope_column = os.environ.get("COPILOT_ROW_SCOPE_COLUMN")
+    scope_value = os.environ.get("COPILOT_ROW_SCOPE_VALUE")
+    row_scope = None
+    if scope_column is not None or scope_value is not None:
+        if not scope_column or not scope_value or not allowed:
+            raise RuntimeError(
+                "COPILOT_ROW_SCOPE_COLUMN and COPILOT_ROW_SCOPE_VALUE require each other "
+                "and COPILOT_ALLOWED_TABLES."
+            )
+        try:
+            row_scope = RowScope(scope_column, scope_value)
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
     raw_max_joins = os.environ.get("COPILOT_MAX_JOINS", "").strip()
     if not allowed and not denied and not guarded and not raw_max_joins and not allowed_columns:
         return None
@@ -88,6 +102,7 @@ def build_access_policy() -> AccessPolicy | None:
         require_where_for_tables=guarded,
         max_joins=max_joins,
         allowed_columns=allowed_columns,
+        row_scope=row_scope,
     )
 
 
@@ -100,6 +115,8 @@ def access_policy_configured() -> bool:
             "COPILOT_DENIED_COLUMNS",
             "COPILOT_GUARDED_TABLES",
             "COPILOT_MAX_JOINS",
+            "COPILOT_ROW_SCOPE_COLUMN",
+            "COPILOT_ROW_SCOPE_VALUE",
         )
     )
 
@@ -124,11 +141,17 @@ def build_copilot(
     if not database_path:
         raise LookupError("No server database configured.")
     access_policy = build_access_policy()
-    if planner is not None and (access_policy is None or access_policy.allowed_tables is None):
+    remote = bool(os.environ.get("COPILOT_API_TOKEN"))
+    if (remote or planner is not None) and (
+        access_policy is None or access_policy.allowed_tables is None
+    ):
         raise RuntimeError(
-            "Model-backed planning requires COPILOT_ALLOWED_TABLES so unauthorized "
-            "schema metadata is never disclosed to the model provider."
+            "Bearer-protected access and model-backed planning require COPILOT_ALLOWED_TABLES."
         )
+    if remote and access_policy and access_policy.require_where_for_tables and not (
+        access_policy.row_scope
+    ):
+        raise RuntimeError("Bearer-protected guarded tables require COPILOT_ROW_SCOPE configuration.")
     return DataCopilot(
         database_path=database_path,
         max_rows=max_rows,

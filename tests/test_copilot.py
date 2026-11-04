@@ -116,4 +116,4 @@ def test_runtime_persists_audit_event_when_store_is_configured(tmp_path) -> None
     assert result.audit.event_id
     payload = audit_path.read_text(encoding="utf-8")
     assert result.audit.event_id in payload
-    assert "show orders" in payload
+    assert "show orders" not in payload

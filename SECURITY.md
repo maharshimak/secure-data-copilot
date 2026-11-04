@@ -1,6 +1,6 @@
 # Security
 
-SQL policy is parsed with `sqlglot` and enforced again by a SQLite authorizer callback at compile time, inside a read-only/query-only connection with tightened SQLite limits, a two-second progress deadline and a result byte budget (see the Security model section of the README). This is defense in depth, not a complete sandbox or a memory isolation boundary. The API uses only the server-configured database path, is local-only by default and supports a single shared bearer token for remote access; it has no per-user identity or row-level security. Planner templates target a small demo schema, not arbitrary business reasoning. Audit records are written only when `COPILOT_AUDIT_LOG_PATH` is set.
+SQL policy is parsed with `sqlglot` and enforced at compilation by a SQLite authorizer. The connection uses read-only mode, query-only mode, tightened limits and a progress deadline. A configured server scope filters each allowed base table through a temporary view before rows become available to caller SQL. Bearer-protected database access requires an explicit table allowlist. The shared token grants access to a single configured security domain. Authenticated per-tenant ownership remains a prerequisite for shared multi-tenant deployments.
 
 Use synthetic or explicitly authorized public data. Do not commit API keys, databases, model credentials, patient records or private employer material. Remote model adapters transmit supplied text to the configured endpoint; choose the provider deliberately.
 

@@ -4,7 +4,7 @@ Local read-only SQLite analytics with deterministic planning, SQL restrictions, 
 
 ## Scope
 
-SQL policy is conservative lexical filtering, not a complete SQL parser. SQLite read-only/query-only modes provide an additional mutation boundary; query progress has a two-second deadline, not a full memory sandbox. The API uses only the server-configured database path. It has no authentication or row/column authorization and must remain local or behind an access-controlled gateway. Planner templates target a small demo schema, not arbitrary business reasoning. Query audit metadata is returned; the optional JSONL audit utility is not wired into the request path.
+SQL policy is parsed before execution. SQLite resolves and reauthorizes table, column and function access inside a read-only connection with a progress deadline. Server-owned temporary views enforce an optional deployment-wide text scope on every allowed base table. API callers and model planners receive only the authorized schema. Bearer authentication is shared, so per-tenant ownership requires a separate identity boundary. The configured JSONL audit store records decisions with redacted diagnostics.
 
 ## Interfaces
 
@@ -16,4 +16,4 @@ Tests include synthetic regression fixtures. Package and container checks verify
 
 ## Planned evolution
 
-AST-based validation; database roles and row/column authorization; authenticated dataset selection; persistent audit wiring; PostgreSQL adapter.
+Authenticated tenant selection, database-native row-level security and a PostgreSQL adapter.

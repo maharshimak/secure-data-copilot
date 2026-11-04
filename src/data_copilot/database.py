@@ -24,7 +24,9 @@ class QueryTimeoutError(ValueError):
 
 
 def _value_size(value: object) -> int:
-    if isinstance(value, (bytes, str)):
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    if isinstance(value, bytes):
         return len(value)
     return 8
 
@@ -71,9 +73,9 @@ class SQLiteCatalog:
             tables = connection.execute(
                 """
                 SELECT name
-                FROM sqlite_master
-                WHERE type = 'table'
-                  AND name NOT LIKE 'sqlite_%'
+                FROM pragma_table_list
+                WHERE schema = 'main' AND type = 'table'
+                  AND lower(substr(name, 1, 7)) <> 'sqlite_'
                 ORDER BY name
                 """
             ).fetchall()
@@ -123,7 +125,7 @@ class SQLiteCatalog:
 
         with closing(self._connect()) as connection:
             if guard is not None:
-                connection.set_authorizer(guard)
+                guard.install(connection)
             self._arm_deadline(connection, self.timeout_seconds)
             rows: list[dict[str, object]] = []
             total = 0
@@ -153,7 +155,7 @@ class SQLiteCatalog:
         """
 
         with closing(self._connect()) as connection:
-            connection.set_authorizer(guard)
+            guard.install(connection)
             self._arm_deadline(connection, self.timeout_seconds)
             try:
                 connection.execute("EXPLAIN " + sql).fetchall()

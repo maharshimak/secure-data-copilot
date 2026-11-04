@@ -1,8 +1,6 @@
-import re
-
 import sqlglot
 from sqlglot import exp
-from sqlglot.errors import ParseError
+from sqlglot.errors import SqlglotError
 
 FORBIDDEN_AST_KEYS = {
     "alter",
@@ -56,13 +54,13 @@ class UnsafeQueryError(ValueError):
 
 
 def normalize_sql(sql: str) -> str:
-    return re.sub(r"\s+", " ", sql.strip().rstrip(";")).strip()
+    return sql.strip().removesuffix(";").rstrip()
 
 
 def _parse_query(sql: str) -> exp.Query:
     try:
         statements = sqlglot.parse(sql, read="sqlite")
-    except ParseError as error:
+    except SqlglotError as error:
         raise UnsafeQueryError("SQL could not be parsed safely.") from error
 
     if len(statements) != 1:
@@ -119,7 +117,7 @@ def validate_read_only(sql: str, max_rows: int = 200) -> str:
         raise UnsafeQueryError("SQL cannot be empty.")
 
     statement = _parse_query(normalized)
-    canonical = statement.sql(dialect="sqlite")
+    canonical = statement.sql(dialect="sqlite", comments=False)
 
     # Bound the outer result regardless of nested LIMITs or CTEs. The database
     # connection independently enforces query_only mode and a wall-clock progress limit.
